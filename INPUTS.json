@@ -28,6 +28,6 @@
     "tests/check-render-areas.py": "20d330917283661d0cc006b5b984c1415ec01b4d310e319e1e0375f25b050ef2",
     "tests/transfer-scissor.cpp": "2aae45c40503d4c812415870035182a091daa5d1c92512646e271d04d972cab2",
     "tools/audit-inputs.py": "25f47b9c33be086ba577c9640a8be18b20ffd8ab3346b7511221df7048848dab",
-    "tools/collect-runtime.py": "5fdcc14243e275c83a6d59c878d6961b915d7be71cf4e5cff162dcb5052f5f04"
+    "tools/collect-runtime.py": "0223a9f828f280ffb3e5acbc06c1a6d52dfbd4ded5e715620484c1e893050b01"
   }
 }
