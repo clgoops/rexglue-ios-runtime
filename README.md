@@ -4,7 +4,7 @@ Intended repository: **clgoops/rexglue-ios-runtime**. This source package suppor
 public review and reproducible builds of the open-source runtime components.
 
 Build the open-source ReXGlue runtime and Xenos graphics plugin for iOS 18+
-ARM64. The repository contains SDK patches, two renderer test sources, build
+ARM64. The repository contains SDK patches, focused renderer test sources, build
 and artifact-audit scripts, an input checksum manifest and upstream licensing.
 It contains no recompiled game source, original game executable, assets, IPA,
 device logs, credentials or signing material. It cannot build a complete game.
@@ -16,10 +16,19 @@ runtime dependency. Artifacts contain the two runtime libraries, license
 notices and checksums. They are retained for one day. Device signing and game
 packaging happen separately on the owner's Windows machine.
 
-The current renderer change bounds ownership-transfer scissors to the copied
-rectangles so attachment render-area optimization can take effect. Host/source
-checks passed; Apple GPU correctness and FPS improvement remain unverified.
-The normal game configuration continues to select the host-target path.
+The transfer-bounds build compiled successfully and was reported visually
+correct, with no useful performance gain. The current diagnostic adds sparse
+same-queue completion-boundary samples for rendering and outside-pass work.
+Eight segments rotate through one in four eligible submissions, with at least
+16 dynamic rendering passes. It reads availability after the existing fence;
+allocation failures disable the diagnostic. The existing performance toggle
+gates capture. Results include pass dimensions, domain bits, work counts and
+shader identifiers in the local application log; device logs stay private.
+
+These are approximate boundary spans, including timestamp overhead, not shader
+busy time or a complete/unbiased frame-cost breakdown. MoltenVK may coalesce
+timestamps; zero/unavailable results are explicitly reported. No native driver
+profiling settings or renderer backend are changed. The host-target path remains.
 
 Use standard macos-15 runners. GitHub documents standard hosted runners as
 [free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).

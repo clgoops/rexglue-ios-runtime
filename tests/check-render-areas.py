@@ -18,6 +18,7 @@ def function(marker):
  return source[start:end]
 out=r'''#include <vulkan/vulkan.h>
 #include <rex/graphics/vulkan/transfer_scissor.h>
+#include <rex/graphics/vulkan/pass_profile.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>

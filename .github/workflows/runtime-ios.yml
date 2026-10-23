@@ -33,7 +33,12 @@ jobs:
           python3 tests/check-render-areas.py sdk render-area-tests.cpp
           xcrun clang++ -std=c++23 -O2 -Isdk/include -Isdk/thirdparty/vulkan-headers/include render-area-tests.cpp -o render-area-tests
           ./render-area-tests | tee render-area-tests.log
-          for test in tests/transfer-scissor.cpp render-area-tests.cpp; do
+          for test in pass-profile render-timing; do
+            python3 tests/check-$test.py sdk $test-tests.cpp
+            xcrun clang++ -std=c++23 -O2 -Isdk/include -Isdk/thirdparty/vulkan-headers/include $test-tests.cpp -o $test-tests
+            ./$test-tests | tee $test-tests.log
+          done
+          for test in tests/transfer-scissor.cpp render-area-tests.cpp pass-profile-tests.cpp render-timing-tests.cpp; do
             xcrun --sdk iphoneos clang++ -std=c++23 -O2 -arch arm64 -miphoneos-version-min=18.0 -Isdk/include -Isdk/thirdparty/vulkan-headers/include -c "$test" -o "$(basename "$test").ios.o"
           done
       - name: Configure iOS runtime
@@ -64,3 +69,5 @@ jobs:
             build.log
             transfer-tests.log
             render-area-tests.log
+            pass-profile-tests.log
+            render-timing-tests.log
