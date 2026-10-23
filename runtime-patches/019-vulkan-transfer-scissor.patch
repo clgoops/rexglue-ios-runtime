@@ -1,0 +1,111 @@
+diff --git a/src/graphics/vulkan/render_target_cache.cpp b/src/graphics/vulkan/render_target_cache.cpp
+--- a/src/graphics/vulkan/render_target_cache.cpp
++++ b/src/graphics/vulkan/render_target_cache.cpp
+@@ -34,2 +34,3 @@
+ #include <rex/graphics/vulkan/render_target_cache.h>
++#include <rex/graphics/vulkan/transfer_scissor.h>
+ #include <rex/graphics/xenos.h>
+@@ -968,2 +969,5 @@
+   InitializeCommon();
++  REXGPU_INFO("Vulkan render targets: backend={}, bounded_ownership_transfers={}",
++              path_ == Path::kHostRenderTargets ? "fbo" : "fsi",
++              path_ == Path::kHostRenderTargets && REXCVAR_GET(vulkan_tight_render_area));
+   return true;
+@@ -5018,8 +5022,2 @@
+       float pixels_to_ndc_y = (2.0f / transfer_viewport.height) * float(draw_resolution_scale_y());
+-      VkRect2D transfer_scissor;
+-      transfer_scissor.offset.x = 0;
+-      transfer_scissor.offset.y = 0;
+-      transfer_scissor.extent = transfer_framebuffer->host_extent;
+-      command_processor_.SetScissor(transfer_scissor);
+-
+       for (auto it = current_transfer_invocations_.cbegin();
+@@ -5074,2 +5072,4 @@
+         }
++        TransferScissor transfer_scissor(transfer_framebuffer->host_extent,
++                                         draw_resolution_scale_x(), draw_resolution_scale_y());
+         for (auto it_merged = it_merged_first; it_merged <= it_merged_last; ++it_merged) {
+@@ -5082,2 +5082,5 @@
+             const Transfer::Rectangle& transfer_rectangle = transfer_invocation_rectangles[j];
++            transfer_scissor.Include(transfer_rectangle.x_pixels, transfer_rectangle.y_pixels,
++                                     transfer_rectangle.width_pixels,
++                                     transfer_rectangle.height_pixels);
+             float transfer_rectangle_x0 = -1.0f + transfer_rectangle.x_pixels * pixels_to_ndc_x;
+@@ -5120,2 +5123,3 @@
+         }
++        command_processor_.SetScissor(transfer_scissor.Get(REXCVAR_GET(vulkan_tight_render_area)));
+         command_buffer.CmdVkBindVertexBuffers(0, 1, &transfer_vertex_buffer,
+diff --git a/include/rex/graphics/vulkan/transfer_scissor.h b/include/rex/graphics/vulkan/transfer_scissor.h
+new file mode 100644
+--- /dev/null
++++ b/include/rex/graphics/vulkan/transfer_scissor.h
+@@ -0,0 +1,62 @@
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++#include <limits>
++
++#include <vulkan/vulkan.h>
++
++namespace rex::graphics::vulkan {
++
++// Ownership-transfer vertices describe guest pixel rectangles. Expose their
++// union as a host scissor so deferred render-area selection can avoid loading
++// and storing unused attachment rows. The viewport and vertices stay unchanged.
++class TransferScissor {
++ public:
++  TransferScissor(VkExtent2D extent, uint32_t scale_x, uint32_t scale_y)
++      : extent_(extent), scale_x_(scale_x), scale_y_(scale_y) {}
++
++  void Include(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
++    if (!scale_x_ || !scale_y_ || !width || !height) return;
++    // Clamp before multiplication; even malformed uint32 rectangles cannot
++    // overflow when endpoints are accumulated or resolution scale is applied.
++    auto scaled = [](uint64_t value, uint32_t scale, uint32_t limit) {
++      return value > limit / scale ? limit : uint32_t(value * scale);
++    };
++    const uint32_t x0 = scaled(x, scale_x_, extent_.width);
++    const uint32_t y0 = scaled(y, scale_y_, extent_.height);
++    const uint32_t x1 = scaled(uint64_t(x) + width, scale_x_, extent_.width);
++    const uint32_t y1 = scaled(uint64_t(y) + height, scale_y_, extent_.height);
++    if (x0 >= x1 || y0 >= y1) return;
++    if (!touched_) {
++      left_ = x0; top_ = y0; right_ = x1; bottom_ = y1;
++      touched_ = true;
++    } else {
++      left_ = std::min(left_, x0); top_ = std::min(top_, y0);
++      right_ = std::max(right_, x1); bottom_ = std::max(bottom_, y1);
++    }
++  }
++
++  VkRect2D Get(bool enabled) const {
++    if (!enabled || !touched_ || !scale_x_ || !scale_y_ ||
++        extent_.width > uint32_t(std::numeric_limits<int32_t>::max()) ||
++        extent_.height > uint32_t(std::numeric_limits<int32_t>::max())) {
++      return {{0, 0}, extent_};
++    }
++    // One host pixel of conservative padding covers float vertex conversion
++    // at rectangle edges. Never expand beyond the original framebuffer.
++    const uint32_t left = left_ ? left_ - 1 : 0;
++    const uint32_t top = top_ ? top_ - 1 : 0;
++    const uint32_t right = right_ < extent_.width ? right_ + 1 : right_;
++    const uint32_t bottom = bottom_ < extent_.height ? bottom_ + 1 : bottom_;
++    return {{int32_t(left), int32_t(top)}, {right - left, bottom - top}};
++  }
++
++ private:
++  VkExtent2D extent_;
++  uint32_t scale_x_, scale_y_;
++  uint32_t left_ = 0, top_ = 0, right_ = 0, bottom_ = 0;
++  bool touched_ = false;
++};
++
++}  // namespace rex::graphics::vulkan
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -80,2 +80,3 @@
+ REXCVAR_DECLARE(bool, vulkan_dynamic_rendering);
++REXCVAR_DECLARE(bool, vulkan_tight_render_area);
+ REXCVAR_DECLARE(bool, vulkan_async_skip_incomplete_frames);

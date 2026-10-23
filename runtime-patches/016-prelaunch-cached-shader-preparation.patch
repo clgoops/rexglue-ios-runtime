@@ -1,0 +1,192 @@
+diff --git a/include/rex/graphics/graphics_system.h b/include/rex/graphics/graphics_system.h
+--- a/include/rex/graphics/graphics_system.h
++++ b/include/rex/graphics/graphics_system.h
+@@ -83,6 +83,9 @@
+   void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
+                                bool blocking) override;
+
++  void InitializeShaderStorageWithCompletion(const std::filesystem::path& cache_root,
++      uint32_t title_id, std::function<void()> completion) override;
++
+   bool is_paused() const { return paused_; }
+   void Pause();
+   void Resume();
+diff --git a/include/rex/rex_app.h b/include/rex/rex_app.h
+--- a/include/rex/rex_app.h
++++ b/include/rex/rex_app.h
+@@ -157,6 +157,12 @@
+   /// Called immediately before the main guest thread is created.
+   /// Everything is set up -- last chance to patch guest memory/code.
+   virtual void OnPreLaunchModule() {}
++
++  // Optional cache preparation gate. UI hooks run on the UI thread. This only
++  // prepares compatible entries recorded by prior runs, not every possible shader.
++  virtual bool WaitForShaderPreparation() const { return false; }
++  virtual void OnShaderPreparationBegin() {}
++  virtual void OnShaderPreparationEnd() {}
+
+   /// Called after the main guest thread is created but before it starts
+   /// executing. The thread is suspended -- attach debuggers/monitors here.
+@@ -263,6 +269,7 @@
+
+  private:
+   std::function<void(PathConfig)> MakeResumeCallback();
++  void ResumePreparedModule();
+
+   // Stand up the ImGui overlay stack (drawer, F3/Backtick/F4 binds, dialogs)
+   // independently of how the presenter/drawer were obtained. `presenter` may be
+@@ -297,6 +304,9 @@
+   std::unique_ptr<Runtime> runtime_;
+   std::unique_ptr<ui::Window> window_;
+   std::thread module_thread_;
++  system::object_ref<system::XThread> pending_launch_thread_;
++  std::shared_ptr<std::atomic<bool>> launch_lifetime_ =
++      std::make_shared<std::atomic<bool>>(true);
+   std::atomic<bool> shutting_down_{false};
+   std::unique_ptr<ui::ImmediateDrawer> immediate_drawer_;
+   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;
+diff --git a/include/rex/system/interfaces/graphics.h b/include/rex/system/interfaces/graphics.h
+--- a/include/rex/system/interfaces/graphics.h
++++ b/include/rex/system/interfaces/graphics.h
+@@ -15,6 +15,7 @@
+
+ #include <cstdint>
+ #include <filesystem>
++#include <functional>
+
+ #include <rex/system/xtypes.h>
+
+@@ -87,6 +88,14 @@
+     (void)blocking;
+   }
+
++  // Complete after attempting compatible cached pipelines. Backends may report
++  // individual invalid entries in their logs; this does not discover unseen shaders.
++  virtual void InitializeShaderStorageWithCompletion(const std::filesystem::path& cache_root,
++      uint32_t title_id, std::function<void()> completion) {
++    InitializeShaderStorage(cache_root, title_id, true);
++    completion();
++  }
++
+   // One-shot convenience for callers that don't care about the split.
+   X_STATUS Setup(runtime::FunctionDispatcher* function_dispatcher, KernelState* kernel_state,
+                  ui::WindowedAppContext* app_context, bool with_presentation) {
+diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
+--- a/src/graphics/graphics_system.cpp
++++ b/src/graphics/graphics_system.cpp
+@@ -15,6 +15,7 @@
+ #include <cctype>
+ #include <cstdint>
+ #include <functional>
++#include <exception>
+ #include <memory>
+ #include <mutex>
+ #include <utility>
+@@ -364,6 +365,26 @@
+   }
+ }
+
++void GraphicsSystem::InitializeShaderStorageWithCompletion(
++    const std::filesystem::path& cache_root, uint32_t title_id,
++    std::function<void()> completion) {
++  if (!command_processor_ || !REXCVAR_GET(store_shaders)) {
++    completion();
++    return;
++  }
++  // Never wait for shader compilation on the UIKit thread. Completion runs on
++  // the command thread, so callers marshal their launch continuation to the UI.
++  command_processor_->CallInThread([this, cache_root, title_id,
++                                    completion = std::move(completion)]() {
++    try {
++      command_processor_->InitializeShaderStorage(cache_root, title_id, true);
++    } catch (const std::exception& error) {
++      REXLOG_ERROR("Shader preparation failed: {}. Missing pipelines may compile during play.", error.what());
++    }
++    completion();
++  });
++}
++
+ void GraphicsSystem::Pause() {
+   paused_ = true;
+   command_processor_->Pause();
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -461,8 +461,8 @@
+
+     OnPreLaunchModule();
+
+-    auto main_thread = runtime_->PrepareModuleLaunch();
+-    if (!main_thread) {
++    pending_launch_thread_ = runtime_->PrepareModuleLaunch();
++    if (!pending_launch_thread_) {
+       REXLOG_ERROR("Failed to launch module");
+       app_context().QuitFromUIThread();
+       return;
+@@ -473,6 +473,21 @@
+       uint32_t title_id = runtime_->kernel_state()->title_id();
+       if (title_id != 0) {
+         REXLOG_INFO("Initializing shader storage for title {:08X}...", title_id);
++        if (WaitForShaderPreparation()) {
++          OnShaderPreparationBegin();
++          auto alive = launch_lifetime_;
++          graphics_system->InitializeShaderStorageWithCompletion(
++              runtime_->cache_root(), title_id, [this, alive]() {
++                if (!alive->load(std::memory_order_acquire)) return;
++                app_context().CallInUIThreadDeferred([this, alive]() {
++                  if (!alive->load(std::memory_order_acquire) ||
++                      shutting_down_.load(std::memory_order_acquire) || !pending_launch_thread_) return;
++                  OnShaderPreparationEnd();
++                  ResumePreparedModule();
++                });
++              });
++          return;
++        }
+ #if defined(__APPLE__) && TARGET_OS_IPHONE
+         // Queue on the GPU command thread before resuming the guest. Vulkan
+         // completes preload there before processing draws; keep UIKit pumping
+@@ -484,17 +499,23 @@
+       }
+     }
+
+-    OnPostLaunchModule(main_thread.get());
+-    main_thread->Resume();
+-
+-    module_thread_ = std::thread([this, main_thread = std::move(main_thread)]() mutable {
+-      main_thread->Wait(0, 0, 0, nullptr);
+-      OnGuestThreadExit(main_thread.get());
+-      REXLOG_INFO("Execution complete");
+-      if (!shutting_down_.load(std::memory_order_acquire)) {
+-        app_context().CallInUIThread([this]() { app_context().QuitFromUIThread(); });
+-      }
+-    });
++    ResumePreparedModule();
++  });
++}
++
++void ReXApp::ResumePreparedModule() {
++  if (shutting_down_.load(std::memory_order_acquire) || !pending_launch_thread_) return;
++  auto main_thread = std::move(pending_launch_thread_);
++  OnPostLaunchModule(main_thread.get());
++  main_thread->Resume();
++
++  module_thread_ = std::thread([this, main_thread = std::move(main_thread)]() mutable {
++    main_thread->Wait(0, 0, 0, nullptr);
++    OnGuestThreadExit(main_thread.get());
++    REXLOG_INFO("Execution complete");
++    if (!shutting_down_.load(std::memory_order_acquire)) {
++      app_context().CallInUIThread([this]() { app_context().QuitFromUIThread(); });
++    }
+   });
+ }
+
+@@ -575,6 +596,9 @@
+ }
+
+ void ReXApp::OnDestroy() {
++  shutting_down_.store(true, std::memory_order_release);
++  launch_lifetime_->store(false, std::memory_order_release);
++  pending_launch_thread_.reset();
+   // Notify subclass before cleanup
+   OnShutdown();
+

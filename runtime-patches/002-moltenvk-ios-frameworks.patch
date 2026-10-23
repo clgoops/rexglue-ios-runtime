@@ -1,0 +1,35 @@
+diff --git a/thirdparty/moltenvk/Common/CMakeLists.txt b/thirdparty/moltenvk/Common/CMakeLists.txt
+index 38873d9..69580b0 100644
+--- a/thirdparty/moltenvk/Common/CMakeLists.txt
++++ b/thirdparty/moltenvk/Common/CMakeLists.txt
+@@ -17,15 +17,21 @@ target_include_directories(MoltenVK_Common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+ 
+ find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
+ find_library(METAL_LIBRARY Metal REQUIRED)
+-find_library(APPKIT_LIBRARY AppKit REQUIRED)
+-find_library(IOKIT_LIBRARY IOKit REQUIRED)
++if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "tvOS")
++    find_library(UIKIT_LIBRARY UIKit REQUIRED)
++    find_library(COREGRAPHICS_LIBRARY CoreGraphics REQUIRED)
++    set(MVK_PLATFORM_FRAMEWORKS ${UIKIT_LIBRARY} ${COREGRAPHICS_LIBRARY})
++else()
++    find_library(APPKIT_LIBRARY AppKit REQUIRED)
++    find_library(IOKIT_LIBRARY IOKit REQUIRED)
++    set(MVK_PLATFORM_FRAMEWORKS ${APPKIT_LIBRARY} ${IOKIT_LIBRARY})
++endif()
+ find_library(IOSURFACE_LIBRARY IOSurface REQUIRED)
+ find_library(QUARTZCORE_LIBRARY QuartzCore REQUIRED)
+ target_link_libraries(MoltenVK_Common PUBLIC
+ 	${FOUNDATION_LIBRARY}
+ 	${METAL_LIBRARY}
+-	${APPKIT_LIBRARY}
+-	${IOKIT_LIBRARY}
++	${MVK_PLATFORM_FRAMEWORKS}
+ 	${IOSURFACE_LIBRARY}
+ 	${QUARTZCORE_LIBRARY}
+ )
+@@ -73,3 +79,4 @@ endif()
+ target_compile_definitions(MoltenVK_Common PUBLIC
+     MVK_USE_METAL_PRIVATE_API=${MVK_USE_METAL_PRIVATE_API_NUM}
+ )
++

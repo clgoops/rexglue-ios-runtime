@@ -1,0 +1,66 @@
+name: Build open-source iOS runtime
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: runtime-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  runtime:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify reviewed inputs
+        run: python3 tools/audit-inputs.py
+      - name: Fetch and patch pinned open-source SDK
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/rexglue/rexglue-sdk.git sdk
+          git -C sdk checkout c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
+          git -C sdk submodule update --init --recursive --depth 1 --jobs 4
+          for patch in runtime-patches/*.patch; do
+            git -C sdk apply "$GITHUB_WORKSPACE/$patch"
+          done
+      - name: Check transfer sample coverage and actual deferred rendering
+        run: |
+          set -euo pipefail
+          xcrun clang++ -std=c++23 -O2 -Isdk/include -Isdk/thirdparty/vulkan-headers/include tests/transfer-scissor.cpp -o transfer-tests
+          ./transfer-tests | tee transfer-tests.log
+          python3 tests/check-render-areas.py sdk render-area-tests.cpp
+          xcrun clang++ -std=c++23 -O2 -Isdk/include -Isdk/thirdparty/vulkan-headers/include render-area-tests.cpp -o render-area-tests
+          ./render-area-tests | tee render-area-tests.log
+          for test in tests/transfer-scissor.cpp render-area-tests.cpp; do
+            xcrun --sdk iphoneos clang++ -std=c++23 -O2 -arch arm64 -miphoneos-version-min=18.0 -Isdk/include -Isdk/thirdparty/vulkan-headers/include -c "$test" -o "$(basename "$test").ios.o"
+          done
+      - name: Configure iOS runtime
+        run: |
+          set -euo pipefail
+          cmake -S sdk -B runtime-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_SYSTEM_PROCESSOR=arm64 -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_ENABLE_PERF_COUNTERS=OFF \
+            -DREXGLUE_USE_D3D12=OFF -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_BUILD_TESTS=OFF 2>&1 | tee configure.log
+      - name: Build runtime and graphics library
+        run: |
+          set -euo pipefail
+          cmake --build runtime-build --target rexgpu-xenos --parallel 3 2>&1 | tee build.log
+      - name: Collect and audit open-source libraries
+        run: python3 tools/collect-runtime.py sdk runtime-build runtime-artifact
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: open-source-ios-runtime
+          retention-days: 1
+          path: |
+            runtime-artifact/
+            configure.log
+            build.log
+            transfer-tests.log
+            render-area-tests.log

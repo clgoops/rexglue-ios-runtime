@@ -1,0 +1,33 @@
+{
+  "sdk_commit": "c94f5ebdcb3c9d1a460ca48e04f9758448f8d518",
+  "files": {
+    ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
+    ".github/workflows/runtime-ios.yml": "9d3f0122e1ca43bbf0c587c9899f7279b097c380bac9c181a69646eee9f9ccbb",
+    ".gitignore": "592189dacca5b0436eb31299777762de349938249279d257be7ae1eb4a99ae79",
+    "LICENSE": "8e065be1da2ff9a16b1f063d4636d8b67e6a654bb90583ea4332e66ac421bb18",
+    "README.md": "b59f26d5f59ee92b307b08ad0ccc954d4f0f47fc556380b9a1145b9089c4d59b",
+    "runtime-patches/001-vulkan-loader-empty-processor.patch": "6c13cad89acf1065920a25ece53201c07b0c6f1faea627a737f48d52bb2325c0",
+    "runtime-patches/002-moltenvk-ios-frameworks.patch": "3b00b25997433690431bb393e5a5feb5bc61708720b08ad88ff64a95d4f8ce50",
+    "runtime-patches/003-ios-sdl-entry-and-video.patch": "db9f90faa174aa5a37b610aa2a34fd3c11e7df5529361197bb21402539165dfa",
+    "runtime-patches/004-ios-codegen-bundle-install.patch": "be542443ee8120693a4c8d509e148a90117179104689264eda2ec08e5af8a936",
+    "runtime-patches/005-ios-memory-region.patch": "04447223c38e0343dde114e868022c25af474b1d12e22b9e2f5dc71be16fd1ca",
+    "runtime-patches/006-ios-writable-logs.patch": "a9d482ed7ec94971ef9318e3ed2b0452d15ba817c4a0c4497781909cc16e414b",
+    "runtime-patches/007-startup-diagnostics.patch": "e17690190300c8b9f706660bebf9b256307c1c523001f459bbacfd93cefd34dc",
+    "runtime-patches/008-ios-sandbox-memory-backing.patch": "2b0e9d8005ed5a7898a457081ba1c57dd235695129b4202cbc39e6f51a7deb60",
+    "runtime-patches/009-vulkan-apple-shader-storage.patch": "c3765cc621d7d34ab3207bd63f430fdf17eee86e05e1b06fd313b47314c75f1a",
+    "runtime-patches/010-ios-nonblocking-shader-preload.patch": "a55918d83b529d374db93ad42a192124b2fb2cadd4ca169f5bc38d0237bfa110",
+    "runtime-patches/011-guest-frame-metrics.patch": "5d922f119e47449a4f80ef074466031b814b4dec950e92d4ad3e12765015d4b6",
+    "runtime-patches/012-vulkan-display-pipeline-reuse.patch": "a1e0004a094661e65177eeddc147991e055fb9aad4feff91e7af37e9c866ca13",
+    "runtime-patches/013-spirv-texture-result-bias.patch": "7a5906c43955aebea5148e69d55550cb3dc7ec164e3325d3ca6a6b22b4d41962",
+    "runtime-patches/014-posix-wait-fractional-deadline.patch": "2c7e88e9a7ef27e9d973d7f012887524dba311904df871e9b01498c41a6529ff",
+    "runtime-patches/015-vulkan-performance-diagnostics.patch": "e096f8e202306789117adce0191841bd1e1ba92a17720b9d853fa93965415a0e",
+    "runtime-patches/016-prelaunch-cached-shader-preparation.patch": "3048f7c40d64e089f87490fb354d22352ebc5511f6d029bab12dd3d49cac09fd",
+    "runtime-patches/017-vulkan-render-area-and-timing.patch": "c150d89be659aff91d476ec048969c443a49cf96dc8e7b60a199189458a4da93",
+    "runtime-patches/018-posix-signaled-multi-wait.patch": "268f99d40b365bf592b080512af77464615b237f546d1042c9453e13892bd2c3",
+    "runtime-patches/019-vulkan-transfer-scissor.patch": "4251ccb8553b511691340f00d90959fd91950aaf9e227fb4ea1d6bcd815a56e7",
+    "tests/check-render-areas.py": "20d330917283661d0cc006b5b984c1415ec01b4d310e319e1e0375f25b050ef2",
+    "tests/transfer-scissor.cpp": "2aae45c40503d4c812415870035182a091daa5d1c92512646e271d04d972cab2",
+    "tools/audit-inputs.py": "25f47b9c33be086ba577c9640a8be18b20ffd8ab3346b7511221df7048848dab",
+    "tools/collect-runtime.py": "5fdcc14243e275c83a6d59c878d6961b915d7be71cf4e5cff162dcb5052f5f04"
+  }
+}

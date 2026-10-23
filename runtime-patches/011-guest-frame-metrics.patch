@@ -1,0 +1,102 @@
+diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
+--- a/include/rex/ui/presenter.h
++++ b/include/rex/ui/presenter.h
+@@ -27,4 +27,5 @@
+ #include <vector>
+
++#include <rex/ui/frame_metrics.h>
+ #include <rex/assert.h>
+ #include <rex/math.h>
+@@ -328,4 +329,7 @@
+   virtual ~Presenter();
+
++  void SetFrameMetricsEnabled(bool enabled) { game_frame_tracker_.SetEnabled(enabled); }
++  GameFrameMetrics GetGameFrameMetrics() const { return game_frame_tracker_.Read(); }
++
+   virtual Surface::TypeFlags GetSupportedSurfaceTypes() const = 0;
+
+@@ -1052,4 +1056,6 @@
+   std::thread dxgi_ui_tick_thread_;
+ #endif  // XE_PLATFORM
++  GameFrameTracker game_frame_tracker_;
++
+ };
+
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -568,4 +568,5 @@
+     }
+     guest_output_active_last_refresh_ = true;
++    game_frame_tracker_.Record(frontbuffer_width, frontbuffer_height);
+   } else {
+     // Request presenting a blank image if there was a true image previously,
+diff --git a/include/rex/ui/frame_metrics.h b/include/rex/ui/frame_metrics.h
+new file mode 100644
+--- /dev/null
++++ b/include/rex/ui/frame_metrics.h
+@@ -0,0 +1,64 @@
++#pragma once
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <chrono>
++#include <cmath>
++#include <cstdint>
++#include <mutex>
++
++namespace rex::ui {
++struct GameFrameMetrics {
++  uint64_t frames = 0;
++  double mean_ms = 0, p95_ms = 0;
++  uint32_t width = 0, height = 0;
++};
++
++// Counts successful guest image refreshes, independently of UI repaint rate.
++// Optional recording costs only one atomic load when disabled.
++class GameFrameTracker {
++ public:
++  void SetEnabled(bool enabled) { enabled_.store(enabled, std::memory_order_relaxed); }
++  void Record(uint32_t width, uint32_t height) {
++    if (!enabled_.load(std::memory_order_relaxed)) return;
++    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count();
++    RecordAt(uint64_t(ns), width, height);
++  }
++  void RecordAt(uint64_t ns, uint32_t width, uint32_t height) {
++    if (!enabled_.load(std::memory_order_relaxed) || !width || !height) return;
++    std::lock_guard lock(mutex_);
++    if (frames_ && ns <= last_ns_) return;
++    if (frames_) {
++      intervals_[next_] = double(ns - last_ns_) / 1e6;
++      next_ = (next_ + 1) % intervals_.size();
++      count_ = std::min(count_ + 1, intervals_.size());
++    }
++    last_ns_ = ns; ++frames_; width_ = width; height_ = height;
++  }
++  GameFrameMetrics Read() const {
++    std::array<double, 120> samples{};
++    size_t count;
++    GameFrameMetrics result;
++    {
++      std::lock_guard lock(mutex_);
++      result.frames = frames_; result.width = width_; result.height = height_;
++      samples = intervals_; count = count_;
++    }
++    if (count) {
++      for (size_t i=0; i<count; ++i) result.mean_ms += samples[i];
++      result.mean_ms /= double(count);
++      std::sort(samples.begin(), samples.begin() + count);
++      result.p95_ms = samples[size_t(std::ceil(double(count) * .95)) - 1];
++    }
++    return result;
++  }
++ private:
++  std::atomic<bool> enabled_{false};
++  mutable std::mutex mutex_;
++  std::array<double,120> intervals_{};
++  size_t next_=0, count_=0;
++  uint64_t last_ns_=0, frames_=0;
++  uint32_t width_=0, height_=0;
++};
++}

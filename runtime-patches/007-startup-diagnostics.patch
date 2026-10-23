@@ -1,0 +1,192 @@
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e..dc5b5f9 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -220,6 +224,8 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+   cache_root_ = paths.cache_root;
+   metadata_root_ = paths.metadata_root;
+ 
++  REXLOG_INFO("Startup: construct runtime");
++  rex::FlushLogging();
+   runtime_ =
+       std::make_unique<rex::Runtime>(paths.game_data_root, paths.user_data_root,
+                                      paths.update_data_root, paths.cache_root, paths.metadata_root);
+@@ -234,6 +240,8 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     runtime_->set_imgui_drawer(imgui_drawer_.get());
+   }
+ 
++  REXLOG_INFO("Startup: run runtime setup");
++  rex::FlushLogging();
+   auto status = runtime_->Setup(ppc_info_, std::move(config_));
+   if (XFAILED(status)) {
+     REXLOG_ERROR("Runtime setup failed: {:08X}", status);
+@@ -283,6 +291,8 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     }
+   }
+ 
++  REXLOG_INFO("Startup: load executable");
++  rex::FlushLogging();
+   status = runtime_->LoadXexImage(xex_image);
+   if (XFAILED(status)) {
+     auto msg = fmt::format("Failed to load XEX ({}): {:08X}", xex_image, status);
+@@ -300,6 +310,8 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+     }
+   }
+ 
++  REXLOG_INFO("Startup: initialize game controls");
++  rex::FlushLogging();
+   OnPostSetup();
+ 
+   return true;
+@@ -487,6 +499,8 @@ std::function<void(PathConfig)> ReXApp::MakeResumeCallback() {
+       app_context().QuitFromUIThread();
+       return;
+     }
++    REXLOG_INFO("Startup: launch game module");
++    rex::FlushLogging();
+     LaunchModule();
+   };
+ }
+diff --git a/src/system/runtime.cpp b/src/system/runtime.cpp
+index c10694c..c3215c3 100644
+--- a/src/system/runtime.cpp
++++ b/src/system/runtime.cpp
+@@ -102,6 +102,8 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
+   };
+ 
+   // Initialize SEH exception support for hardware exception handling
++  REXLOG_INFO("Startup: install exception handlers");
++  rex::FlushLogging();
+   rex::initialize_seh();
+ 
+   // Initialize clock
+@@ -115,11 +117,15 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
+   tool_mode_ = config.tool_mode;
+ 
+   // Create memory system first
++  REXLOG_INFO("Startup: initialize guest memory");
++  rex::FlushLogging();
+   memory_ = std::make_unique<memory::Memory>();
+   if (!memory_->Initialize()) {
+     return fail(X_STATUS_UNSUCCESSFUL, "memory init failed");
+   }
+ 
++  REXLOG_INFO("Startup: initialize kernel and dispatch");
++  rex::FlushLogging();
+   export_resolver_ = std::make_unique<runtime::ExportResolver>();
+ 
+   function_dispatcher_ =
+@@ -132,6 +138,8 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
+   kernel_state_ = std::make_unique<system::KernelState>(this);
+ 
+   // Initialize input from injected config
++  REXLOG_INFO("Startup: initialize input");
++  rex::FlushLogging();
+   if (config.input_factory) {
+     input_system_ = config.input_factory(tool_mode_);
+     if (input_system_) {
+@@ -147,11 +155,15 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
+   }
+ 
+   // HLE kernel modules and apps.
++  REXLOG_INFO("Startup: initialize kernel modules");
++  rex::FlushLogging();
+   if (config.kernel_init) {
+     config.kernel_init(this, kernel_state_.get());
+   }
+ 
+   // Initialize the APU (Audio Processing Unit) from injected config
++  REXLOG_INFO("Startup: initialize audio");
++  rex::FlushLogging();
+   if (config.audio_factory) {
+     audio_system_ = config.audio_factory(function_dispatcher_.get());
+     if (audio_system_) {
+@@ -167,6 +179,8 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
+   }
+ 
+   // Set up VFS: game_data_root as game:/d:, update_data_root as update:
++  REXLOG_INFO("Startup: mount game files");
++  rex::FlushLogging();
+   if (!SetupVfs()) {
+     return fail(X_STATUS_UNSUCCESSFUL, "VFS setup failed");
+   }
+@@ -179,6 +193,8 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
+   }
+ 
+   // Initialize GPU from injected config
++  REXLOG_INFO("Startup: initialize game GPU");
++  rex::FlushLogging();
+   if (config.graphics) {
+     graphics_system_ = std::move(config.graphics);
+     bool with_presentation = (app_context_ != nullptr);
+diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
+index 76cc877..c70415f 100644
+--- a/src/system/xmemory.cpp
++++ b/src/system/xmemory.cpp
+@@ -140,10 +140,13 @@ bool Memory::Initialize() {
+   const size_t mapping_size =
+       rex::round_up(static_cast<size_t>(0x120000000ull) + system_allocation_granularity_,
+                     static_cast<size_t>(system_allocation_granularity_));
++  REXLOG_INFO("Startup: create guest memory backing");
++  rex::FlushLogging();
+   mapping_ = rex::memory::CreateFileMappingHandle(file_name_, mapping_size,
+                                                   rex::memory::PageAccess::kReadWrite, false);
+   if (mapping_ == rex::memory::kFileMappingHandleInvalid) {
+     REXSYS_ERROR("Unable to reserve the 4gb guest address space.");
++    rex::FlushLogging();
+     assert_always();
+     return false;
+   }
+@@ -151,8 +154,11 @@ bool Memory::Initialize() {
+ #if REX_PLATFORM_MAC
+   // On macOS, reserve a contiguous host range first, then carve guest views
+   // into it with MAP_SHARED|MAP_FIXED so all views share the same backing fd.
++  REXLOG_INFO("Startup: map guest address space");
++  rex::FlushLogging();
+   if (MapViewsMac()) {
+     REXSYS_ERROR("Unable to find a continuous block in the 64bit address space.");
++    rex::FlushLogging();
+     assert_always();
+     return false;
+   }
+@@ -170,6 +176,7 @@ bool Memory::Initialize() {
+   }
+   if (!mapping_base_) {
+     REXSYS_ERROR("Unable to find a continuous block in the 64bit address space.");
++    rex::FlushLogging();
+     assert_always();
+     return false;
+   }
+@@ -223,11 +230,14 @@ bool Memory::Initialize() {
+                           rex::memory::PageAccess::kReadWrite);
+ 
+   // Install MMIO handler for physical address translation and MMIO ranges
++  REXLOG_INFO("Startup: install MMIO handler");
++  rex::FlushLogging();
+   mmio_handler_ = runtime::MMIOHandler::Install(
+       virtual_membase_, physical_membase_, physical_membase_ + 0x1FFFFFFF, HostToGuestVirtualThunk,
+       this, AccessViolationCallbackThunk, this);
+   if (!mmio_handler_) {
+     REXSYS_ERROR("Unable to install MMIO handlers");
++    rex::FlushLogging();
+     assert_always();
+     return false;
+   }
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39..3c5bbb0 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -476,9 +491,13 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+   auto full_path = MakeShmName(path);
+   int ret = shm_open(full_path.c_str(), oflag, 0777);
+   if (ret < 0) {
++    REXLOG_ERROR("Guest shared memory creation failed: errno {} ({})", errno, std::strerror(errno));
++    rex::FlushLogging();
+     return kFileMappingHandleInvalid;
+   }
+   if (rex_ftruncate64(ret, static_cast<off_t>(length)) != 0) {
++    REXLOG_ERROR("Guest shared memory resize failed ({} bytes): errno {} ({})", length, errno, std::strerror(errno));
++    rex::FlushLogging();
+     close(ret);
+     shm_unlink(full_path.c_str());
+     return kFileMappingHandleInvalid;

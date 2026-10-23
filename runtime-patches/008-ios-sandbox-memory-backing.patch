@@ -1,0 +1,91 @@
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -26,6 +26,9 @@
+ #include <mach/mach_vm.h>
+ #endif
+ #include <mach/vm_region.h>
++#if TARGET_OS_IPHONE
++#include <rex/memory/ios_backing.h>
++#endif
+ #endif  // REX_PLATFORM_MAC
+ 
+ #include <sys/mman.h>
+@@ -469,6 +472,25 @@
+     return kFileMappingHandleInvalid;
+   }
+   return static_cast<FileMappingHandle>(ashmem_fd);
++#elif REX_PLATFORM_MAC && TARGET_OS_IPHONE
++  std::error_code error;
++  const auto directory = std::filesystem::temp_directory_path(error);
++  if (error) {
++    REXLOG_ERROR("iOS guest memory temporary directory unavailable: {}", error.message());
++    rex::FlushLogging();
++    return kFileMappingHandleInvalid;
++  }
++  const int fd = CreateIosBackingFile(directory.string(), length);
++  if (fd < 0) {
++    const int saved_error = errno;
++    REXLOG_ERROR("iOS guest memory backing failed ({} bytes): errno {} ({})", length,
++                 saved_error, std::strerror(saved_error));
++    rex::FlushLogging();
++    return kFileMappingHandleInvalid;
++  }
++  REXLOG_INFO("iOS guest memory: created unlinked sparse backing ({} bytes)", length);
++  rex::FlushLogging();
++  return static_cast<FileMappingHandle>(fd);
+ #else
+   int oflag;
+   switch (access) {
+@@ -508,7 +530,7 @@
+ 
+ void CloseFileMappingHandle(FileMappingHandle handle, const std::filesystem::path& path) {
+   close(static_cast<int>(handle));
+-#if !REX_PLATFORM_ANDROID
++#if !REX_PLATFORM_ANDROID && !(REX_PLATFORM_MAC && TARGET_OS_IPHONE)
+   auto full_path = MakeShmName(path);
+   shm_unlink(full_path.c_str());
+ #endif
+--- /dev/null
++++ b/include/rex/memory/ios_backing.h
+@@ -0,0 +1,41 @@
++#pragma once
++
++#include <cerrno>
++#include <cstdlib>
++#include <fcntl.h>
++#include <limits>
++#include <string>
++#include <unistd.h>
++
++namespace rex::memory {
++
++// iOS denies POSIX shm_open in the app sandbox. An unlinked temporary file
++// supports the same MAP_SHARED aliases without a global shared-memory name.
++// ftruncate reserves a sparse logical size; it does not write 4.5 GiB of data.
++inline int CreateIosBackingFile(const std::string& directory, size_t length) {
++  if (directory.empty()) { errno = ENOENT; return -1; }
++  if (length > static_cast<size_t>(std::numeric_limits<off_t>::max())) {
++    errno = EFBIG;
++    return -1;
++  }
++  std::string name = directory + "/blur-memory-XXXXXX";
++  int fd = mkstemp(name.data());
++  if (fd < 0) return -1;
++  // Remove the name immediately, so process exit also reclaims the backing.
++  if (unlink(name.c_str()) != 0) {
++    const int error = errno;
++    close(fd);
++    errno = error;
++    return -1;
++  }
++  if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 ||
++      ftruncate(fd, static_cast<off_t>(length)) != 0) {
++    const int error = errno;
++    close(fd);
++    errno = error;
++    return -1;
++  }
++  return fd;
++}
++
++}  // namespace rex::memory

@@ -1,0 +1,40 @@
+diff --git a/src/ui/windowed_app_context_sdl.cpp b/src/ui/windowed_app_context_sdl.cpp
+index dc0b4c2..2a2dd7a 100644
+--- a/src/ui/windowed_app_context_sdl.cpp
++++ b/src/ui/windowed_app_context_sdl.cpp
+@@ -44,7 +44,11 @@ bool SDLWindowedAppContext::Initialize() {
+ #if REX_PLATFORM_MAC
+   // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
+   if (requested_driver.empty()) {
++#if TARGET_OS_IPHONE
++    requested_driver = "uikit";
++#else
+     requested_driver = "cocoa";
++#endif
+   }
+ #endif
+   if (!requested_driver.empty()) {
+@@ -213,3 +217,4 @@ void SDLWindowedAppContext::ProcessQuitRequest() {
+ }
+ 
+ }  // namespace rex::ui
++
+diff --git a/src/ui/windowed_app_main_sdl.cpp b/src/ui/windowed_app_main_sdl.cpp
+index 77bb1dc..61d1aea 100644
+--- a/src/ui/windowed_app_main_sdl.cpp
++++ b/src/ui/windowed_app_main_sdl.cpp
+@@ -19,6 +19,9 @@
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+ #include <rex/platform.h>
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++#include <SDL3/SDL_main.h>
++#endif
+ #include <rex/ui/windowed_app.h>
+ #include <rex/ui/windowed_app_context_sdl.h>
+ 
+@@ -131,3 +134,4 @@ int main(int argc, char* argv[]) {
+ }
+ 
+ #endif
++

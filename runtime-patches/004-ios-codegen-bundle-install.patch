@@ -1,0 +1,12 @@
+diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
+index d9a64eb..a45203d 100644
+--- a/cmake/rexglue_install.cmake
++++ b/cmake/rexglue_install.cmake
+@@ -55,6 +55,7 @@ install(TARGETS ${REXGLUE_INSTALL_TARGETS}
+ install(TARGETS rexglue
+     EXPORT rexglueTargets
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
++    BUNDLE DESTINATION ${CMAKE_INSTALL_BINDIR}
+     CONFIGURATIONS Release
+ )
+ 

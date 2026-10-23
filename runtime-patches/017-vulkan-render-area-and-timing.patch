@@ -1,0 +1,400 @@
+diff --git a/include/rex/graphics/performance_stats.h b/include/rex/graphics/performance_stats.h
+--- a/include/rex/graphics/performance_stats.h
++++ b/include/rex/graphics/performance_stats.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
+ #include <atomic>
++#include <array>
++#include <chrono>
+ #include <cstdint>
+ 
+ namespace rex::graphics {
+@@ -10,6 +12,19 @@
+ // Fields are independently atomic snapshots, not a transaction across counters.
+ struct PerformanceMetrics {
+   bool enabled = false;
++  bool gpu_timing_supported = false;
++  uint64_t render_passes=0;
++  uint64_t reduced_render_passes=0;
++  uint64_t render_area_pixels=0;
++  uint64_t render_area_used_pixels=0;
++  uint64_t gpu_timed_submissions=0;
++  double draw_cpu_ms=0;
++  double resolve_cpu_ms=0;
++  double encode_cpu_ms=0;
++  double submit_cpu_ms=0;
++  double fence_cpu_ms=0;
++  double gpu_submission_ms=0;
++
+   // Guest draw commands recorded, excluding presentation and internal transfers.
+   uint64_t draw_calls = 0;
+   // IssueCopy calls accepted for processing; may include no-op/failed resolves.
+@@ -30,6 +45,28 @@
+ class PerformanceStats {
+  public:
+   enum class CpuWait { kOcclusion, kMemexport };
++  enum class Stage { kDraw, kResolve, kEncode, kSubmit, kFence, kCount };
++  // Inclusive CPU wall scopes. Draw/resolve may contain submit/fence time; do not sum them.
++  class Scope {
++   public:
++    Scope(PerformanceStats& stats,Stage stage): stats_(stats.enabled()?&stats:nullptr),stage_(stage) {
++      if(stats_) start_=std::chrono::steady_clock::now();
++    }
++    ~Scope() { if(stats_) stats_->RecordStage(stage_,uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now()-start_).count())); }
++    Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
++   private: PerformanceStats* stats_;Stage stage_;std::chrono::steady_clock::time_point start_;
++  };
++  void RecordStage(Stage stage,uint64_t ns) { if(enabled()) stage_ns_[size_t(stage)].fetch_add(ns,std::memory_order_relaxed); }
++  void SetGpuTimingSupported(bool supported) {gpu_timing_supported_.store(supported,std::memory_order_relaxed);}
++  void RecordGpuSubmission(uint64_t ns) { if(enabled()) {gpu_submission_ns_.fetch_add(ns,std::memory_order_relaxed);gpu_timed_submissions_.fetch_add(1,std::memory_order_relaxed);} }
++  void RecordRenderAreas(uint64_t passes,uint64_t reduced,uint64_t original,uint64_t used) {
++    if(!enabled()) return;
++    render_passes_.fetch_add(passes,std::memory_order_relaxed);
++    reduced_render_passes_.fetch_add(reduced,std::memory_order_relaxed);
++    render_area_pixels_.fetch_add(original,std::memory_order_relaxed);
++    render_area_used_pixels_.fetch_add(used,std::memory_order_relaxed);
++  }
+ 
+   void SetEnabled(bool enabled) { enabled_.store(enabled, std::memory_order_relaxed); }
+   bool enabled() const { return enabled_.load(std::memory_order_relaxed); }
+@@ -37,6 +74,18 @@
+   PerformanceMetrics GetMetrics() const {
+     PerformanceMetrics metrics;
+     metrics.enabled = enabled();
++    metrics.gpu_timing_supported=gpu_timing_supported_.load(std::memory_order_relaxed);
++    metrics.render_passes=render_passes_.load(std::memory_order_relaxed);
++    metrics.reduced_render_passes=reduced_render_passes_.load(std::memory_order_relaxed);
++    metrics.render_area_pixels=render_area_pixels_.load(std::memory_order_relaxed);
++    metrics.render_area_used_pixels=render_area_used_pixels_.load(std::memory_order_relaxed);
++    metrics.gpu_timed_submissions=gpu_timed_submissions_.load(std::memory_order_relaxed);
++    metrics.draw_cpu_ms=double(stage_ns_[0].load(std::memory_order_relaxed))/1e6;
++    metrics.resolve_cpu_ms=double(stage_ns_[1].load(std::memory_order_relaxed))/1e6;
++    metrics.encode_cpu_ms=double(stage_ns_[2].load(std::memory_order_relaxed))/1e6;
++    metrics.submit_cpu_ms=double(stage_ns_[3].load(std::memory_order_relaxed))/1e6;
++    metrics.fence_cpu_ms=double(stage_ns_[4].load(std::memory_order_relaxed))/1e6;
++    metrics.gpu_submission_ms=double(gpu_submission_ns_.load(std::memory_order_relaxed))/1e6;
+     metrics.draw_calls = draw_calls_.load(std::memory_order_relaxed);
+     metrics.resolve_calls = resolve_calls_.load(std::memory_order_relaxed);
+     metrics.queue_submissions = queue_submissions_.load(std::memory_order_relaxed);
+@@ -76,6 +125,15 @@
+   }
+ 
+   std::atomic<bool> enabled_{false};
++  std::atomic<bool> gpu_timing_supported_{false};
++  std::array<std::atomic<uint64_t>,size_t(Stage::kCount)> stage_ns_{};
++  std::atomic<uint64_t> gpu_submission_ns_{0};
++  std::atomic<uint64_t> render_passes_{0};
++  std::atomic<uint64_t> reduced_render_passes_{0};
++  std::atomic<uint64_t> render_area_pixels_{0};
++  std::atomic<uint64_t> render_area_used_pixels_{0};
++  std::atomic<uint64_t> gpu_timed_submissions_{0};
++
+   std::atomic<uint64_t> draw_calls_{0};
+   std::atomic<uint64_t> resolve_calls_{0};
+   std::atomic<uint64_t> queue_submissions_{0};
+diff --git a/include/rex/graphics/vulkan/command_processor.h b/include/rex/graphics/vulkan/command_processor.h
+--- a/include/rex/graphics/vulkan/command_processor.h
++++ b/include/rex/graphics/vulkan/command_processor.h
+@@ -270,10 +270,16 @@
+  private:
+   bool AwaitQueueOperationsCompletionForPerformanceStats(PerformanceStats::CpuWait wait);
+   const std::shared_ptr<PerformanceStats> performance_stats_;
++  bool timing_initialized_=false;
++  uint32_t timestamp_valid_bits_=0;
++  double timestamp_period_=0;
++
+ 
+   struct CommandBuffer {
+     VkCommandPool pool;
+     VkCommandBuffer buffer;
++    VkQueryPool timing_pool=VK_NULL_HANDLE;
++    bool timing_recorded=false;
+   };
+ 
+   struct SparseBufferBind {
+diff --git a/include/rex/graphics/vulkan/deferred_command_buffer.h b/include/rex/graphics/vulkan/deferred_command_buffer.h
+--- a/include/rex/graphics/vulkan/deferred_command_buffer.h
++++ b/include/rex/graphics/vulkan/deferred_command_buffer.h
+@@ -30,6 +30,9 @@
+ 
+   void Reset();
+   void Execute(VkCommandBuffer command_buffer);
++
++  struct RenderAreaStats { uint64_t passes=0, reduced_passes=0, original_pixels=0, used_pixels=0; };
++  RenderAreaStats OptimizeRenderAreas(bool enabled);
+ 
+   // render_pass_begin->pNext of all barriers must be null.
+   void CmdVkBeginRenderPass(const VkRenderPassBeginInfo* render_pass_begin,
+diff --git a/include/rex/ui/vulkan/functions/device_1_0.inc b/include/rex/ui/vulkan/functions/device_1_0.inc
+--- a/include/rex/ui/vulkan/functions/device_1_0.inc
++++ b/include/rex/ui/vulkan/functions/device_1_0.inc
+@@ -82,3 +82,6 @@
+ XE_UI_VULKAN_FUNCTION(vkUnmapMemory)
+ XE_UI_VULKAN_FUNCTION(vkUpdateDescriptorSets)
+ XE_UI_VULKAN_FUNCTION(vkWaitForFences)
++
++XE_UI_VULKAN_FUNCTION(vkCmdWriteTimestamp)
++XE_UI_VULKAN_FUNCTION(vkGetQueryPoolResults)
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -69,6 +69,9 @@
+                     "Use VK_KHR_dynamic_rendering for Vulkan GPU emulation when supported by the "
+                     "device (falls back to render passes otherwise)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++REXCVAR_DEFINE_BOOL(vulkan_tight_render_area, false, "GPU/Vulkan",
++                    "Bound dynamic LOAD/STORE passes to their complete draw and clear area");
+ 
+ namespace rex::graphics::vulkan {
+ 
+@@ -2074,10 +2077,12 @@
+ 
+   deferred_command_buffer_.Reset();
+   for (const auto& command_buffer_pair : command_buffers_submitted_) {
++    if(command_buffer_pair.second.timing_pool) dfn.vkDestroyQueryPool(device,command_buffer_pair.second.timing_pool,nullptr);
+     dfn.vkDestroyCommandPool(device, command_buffer_pair.second.pool, nullptr);
+   }
+   command_buffers_submitted_.clear();
+   for (const CommandBuffer& command_buffer : command_buffers_writable_) {
++    if(command_buffer.timing_pool) dfn.vkDestroyQueryPool(device,command_buffer.timing_pool,nullptr);
+     dfn.vkDestroyCommandPool(device, command_buffer.pool, nullptr);
+   }
+   command_buffers_writable_.clear();
+@@ -3609,6 +3614,7 @@
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+ 
++  PerformanceStats::Scope draw_time(*performance_stats_,PerformanceStats::Stage::kDraw);
+   const RegisterFile& regs = *register_file_;
+   (void)index_buffer_info;
+   auto draw_fail = [&](const char* stage) {
+@@ -4399,6 +4405,7 @@
+ }
+ 
+ bool VulkanCommandProcessor::IssueCopy() {
++  PerformanceStats::Scope resolve_time(*performance_stats_,PerformanceStats::Stage::kResolve);
+ #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+@@ -4989,6 +4996,7 @@
+     // defined by vkQueueSubmit additionally include in the first
+     // synchronization scope all commands that occur earlier in submission
+     // order."
++    PerformanceStats::Scope fence_time(*performance_stats_,PerformanceStats::Stage::kFence);
+     VkResult wait_result =
+         dfn.vkWaitForFences(device, uint32_t(await_submission - submission_completed_),
+                             submissions_in_flight_fences_.data(), VK_TRUE, UINT64_MAX);
+@@ -5051,7 +5059,22 @@
+     if (command_buffer_pair.first > submission_completed_) {
+       break;
+     }
+-    command_buffers_writable_.push_back(command_buffer_pair.second);
++    CommandBuffer completed=command_buffer_pair.second;
++    if (completed.timing_recorded && timestamp_valid_bits_) {
++      // Read only after the existing fence says the whole submission completed.
++      // No WAIT_BIT and no extra GPU wait introduced by diagnostics.
++      uint64_t results[4]={}; // timestamp, availability, timestamp, availability
++      const VkResult result=dfn.vkGetQueryPoolResults(device,completed.timing_pool,0,2,
++          sizeof(results),results,2*sizeof(uint64_t),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
++      if (result==VK_SUCCESS && results[1] && results[3]) {
++        const uint64_t mask=timestamp_valid_bits_>=64?UINT64_MAX:((uint64_t(1)<<timestamp_valid_bits_)-1);
++        const uint64_t ticks=(results[2]-results[0])&mask;
++        const double ns=double(ticks)*timestamp_period_;
++        if (ns>=0 && ns<double(UINT64_MAX)) performance_stats_->RecordGpuSubmission(uint64_t(ns));
++      }
++      completed.timing_recorded=false;
++    }
++    command_buffers_writable_.push_back(completed);
+     command_buffers_submitted_.pop_front();
+   }
+ 
+@@ -5303,7 +5326,8 @@
+       if (dfn.vkAllocateCommandBuffers(device, &command_buffer_allocate_info,
+                                        &command_buffer.buffer) != VK_SUCCESS) {
+         REXGPU_ERROR("Failed to allocate a Vulkan command buffer");
+-        dfn.vkDestroyCommandPool(device, command_buffer.pool, nullptr);
++        if(command_buffer.timing_pool) dfn.vkDestroyQueryPool(device,command_buffer.timing_pool,nullptr);
++    dfn.vkDestroyCommandPool(device, command_buffer.pool, nullptr);
+         return false;
+       }
+       command_buffers_writable_.push_back(command_buffer);
+@@ -5404,7 +5428,45 @@
+       REXGPU_ERROR("Failed to begin a Vulkan command buffer");
+       return false;
+     }
+-    deferred_command_buffer_.Execute(command_buffer.buffer);
++    if (performance_stats_->enabled() && !timing_initialized_) {
++      timing_initialized_=true;
++      const auto& ifn=vulkan_device->vulkan_instance()->functions();
++      VkPhysicalDeviceProperties properties;
++      ifn.vkGetPhysicalDeviceProperties(vulkan_device->physical_device(),&properties);
++      uint32_t count=0;
++      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device->physical_device(),&count,nullptr);
++      std::vector<VkQueueFamilyProperties> families(count);
++      ifn.vkGetPhysicalDeviceQueueFamilyProperties(vulkan_device->physical_device(),&count,families.data());
++      if(vulkan_device->queue_family_graphics_compute()<count)
++        timestamp_valid_bits_=families[vulkan_device->queue_family_graphics_compute()].timestampValidBits;
++      timestamp_period_=properties.limits.timestampPeriod;
++      performance_stats_->SetGpuTimingSupported(timestamp_valid_bits_>0 && timestamp_period_>0);
++      REXGPU_INFO("Performance timestamps: valid_bits={} period_ns={}",timestamp_valid_bits_,timestamp_period_);
++    }
++    if (performance_stats_->enabled() && timestamp_valid_bits_ && timestamp_period_>0 && !command_buffer.timing_pool) {
++      VkQueryPoolCreateInfo info={};info.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
++      info.queryType=VK_QUERY_TYPE_TIMESTAMP;info.queryCount=2;
++      if(dfn.vkCreateQueryPool(device,&info,nullptr,&command_buffer.timing_pool)!=VK_SUCCESS) {
++        command_buffer.timing_pool=VK_NULL_HANDLE;
++        timestamp_valid_bits_=0;performance_stats_->SetGpuTimingSupported(false);
++        REXGPU_WARN("Performance timestamps unavailable; CPU timing remains enabled");
++      }
++      // Keep ownership in the writable list even if recording/submission fails.
++      command_buffers_writable_.back().timing_pool=command_buffer.timing_pool;
++    }
++    command_buffer.timing_recorded=performance_stats_->enabled() && timestamp_valid_bits_ && command_buffer.timing_pool;
++    if(command_buffer.timing_recorded) {
++      dfn.vkCmdResetQueryPool(command_buffer.buffer,command_buffer.timing_pool,0,2);
++      dfn.vkCmdWriteTimestamp(command_buffer.buffer,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,command_buffer.timing_pool,0);
++    }
++    {
++      PerformanceStats::Scope encode_time(*performance_stats_,PerformanceStats::Stage::kEncode);
++      const auto areas=deferred_command_buffer_.OptimizeRenderAreas(REXCVAR_GET(vulkan_tight_render_area));
++      performance_stats_->RecordRenderAreas(areas.passes,areas.reduced_passes,areas.original_pixels,areas.used_pixels);
++      deferred_command_buffer_.Execute(command_buffer.buffer);
++    }
++    if(command_buffer.timing_recorded)
++      dfn.vkCmdWriteTimestamp(command_buffer.buffer,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,command_buffer.timing_pool,1);
+     if (dfn.vkEndCommandBuffer(command_buffer.buffer) != VK_SUCCESS) {
+       REXGPU_ERROR("Failed to end a Vulkan command buffer");
+       return false;
+@@ -5434,6 +5496,7 @@
+     }
+     VkResult submit_result;
+     {
++      PerformanceStats::Scope submit_time(*performance_stats_,PerformanceStats::Stage::kSubmit);
+       ui::vulkan::VulkanDevice::Queue::Acquisition queue_acquisition =
+           vulkan_device->AcquireQueue(vulkan_device->queue_family_graphics_compute(), 0);
+       submit_result = dfn.vkQueueSubmit(queue_acquisition.queue(), 1, &submit_info, fence);
+@@ -5484,7 +5547,8 @@
+ 
+       assert_true(command_buffers_submitted_.empty());
+       for (const CommandBuffer& command_buffer : command_buffers_writable_) {
+-        dfn.vkDestroyCommandPool(device, command_buffer.pool, nullptr);
++        if(command_buffer.timing_pool) dfn.vkDestroyQueryPool(device,command_buffer.timing_pool,nullptr);
++    dfn.vkDestroyCommandPool(device, command_buffer.pool, nullptr);
+       }
+       command_buffers_writable_.clear();
+ 
+diff --git a/src/graphics/vulkan/deferred_command_buffer.cpp b/src/graphics/vulkan/deferred_command_buffer.cpp
+--- a/src/graphics/vulkan/deferred_command_buffer.cpp
++++ b/src/graphics/vulkan/deferred_command_buffer.cpp
+@@ -30,6 +30,108 @@
+ 
+ void DeferredCommandBuffer::Reset() {
+   command_stream_.clear();
++}
++
++
++// Bound only dynamic LOAD/STORE passes. Their complete command stream is already
++// known here, so include every draw scissor and every explicit clear rectangle.
++// Keep the original area for unknown state, resolves, attachment clears/discards,
++// multiview, secondary/suspended rendering, empty passes, and legacy render passes.
++DeferredCommandBuffer::RenderAreaStats DeferredCommandBuffer::OptimizeRenderAreas(bool enabled) {
++  RenderAreaStats stats;
++  ArgsVkBeginRendering* begin = nullptr;
++  VkRect2D scissor = {};
++  bool scissor_known = false, safe = false, touched = false;
++  int64_t left=0, top=0, right=0, bottom=0;
++  auto include = [&](VkRect2D rect) {
++    if (!begin || !safe) return;
++    const VkRect2D& full = begin->render_area;
++    const int64_t x0 = std::max<int64_t>(full.offset.x,rect.offset.x);
++    const int64_t y0 = std::max<int64_t>(full.offset.y,rect.offset.y);
++    const int64_t x1 = std::min(int64_t(full.offset.x)+full.extent.width,
++                               int64_t(rect.offset.x)+rect.extent.width);
++    const int64_t y1 = std::min(int64_t(full.offset.y)+full.extent.height,
++                               int64_t(rect.offset.y)+rect.extent.height);
++    if (x1<=x0 || y1<=y0) return;
++    if (!touched) { left=x0;top=y0;right=x1;bottom=y1;touched=true; }
++    else { left=std::min(left,x0);top=std::min(top,y0);
++           right=std::max(right,x1);bottom=std::max(bottom,y1); }
++  };
++  auto finish = [&]() {
++    if (!begin) return;
++    ++stats.passes;
++    const auto full=begin->render_area;
++    const uint64_t full_pixels=uint64_t(full.extent.width)*full.extent.height;
++    stats.original_pixels+=full_pixels;
++    if (enabled && safe && touched) {
++      // Expand to 32-pixel boundaries, clamped to the original area. This is
++      // conservative padding, not an assumption about the hardware tile size.
++      left=std::max<int64_t>(full.offset.x,(left/32)*32);
++      top=std::max<int64_t>(full.offset.y,(top/32)*32);
++      right=std::min(int64_t(full.offset.x)+full.extent.width,((right+31)/32)*32);
++      bottom=std::min(int64_t(full.offset.y)+full.extent.height,((bottom+31)/32)*32);
++      begin->render_area={{int32_t(left),int32_t(top)},
++                          {uint32_t(right-left),uint32_t(bottom-top)}};
++    }
++    const uint64_t used=uint64_t(begin->render_area.extent.width)*begin->render_area.extent.height;
++    stats.used_pixels+=used;
++    if (used<full_pixels) ++stats.reduced_passes;
++    begin=nullptr;
++  };
++  uintmax_t* stream=command_stream_.data();
++  size_t remaining=command_stream_.size();
++  while (remaining) {
++    const auto& header=*reinterpret_cast<const CommandHeader*>(stream);
++    stream+=kCommandHeaderSizeElements;remaining-=kCommandHeaderSizeElements;
++    switch (header.command) {
++      case Command::kVkBeginRendering: {
++        // Nested passes are invalid. Do not attempt to optimize malformed input.
++        if (begin) { safe=false;finish(); }
++        begin=reinterpret_cast<ArgsVkBeginRendering*>(stream);
++        safe=begin->flags==0 && begin->view_mask==0 && begin->layer_count==1;
++        touched=false;
++        const auto* attachments=reinterpret_cast<const VkRenderingAttachmentInfo*>(
++            reinterpret_cast<const uint8_t*>(stream)+
++            rex::align(sizeof(ArgsVkBeginRendering),alignof(VkRenderingAttachmentInfo)));
++        const uint32_t count=begin->color_attachment_count+uint32_t(begin->has_depth_attachment)+
++                             uint32_t(begin->has_stencil_attachment);
++        for (uint32_t i=0;i<count;++i) {
++          const auto& a=attachments[i];
++          if (a.imageView!=VK_NULL_HANDLE &&
++              (a.pNext || a.loadOp!=VK_ATTACHMENT_LOAD_OP_LOAD ||
++               a.storeOp!=VK_ATTACHMENT_STORE_OP_STORE || a.resolveMode!=VK_RESOLVE_MODE_NONE)) safe=false;
++        }
++      } break;
++      case Command::kVkSetScissor: {
++        const auto& args=*reinterpret_cast<const ArgsVkSetScissor*>(stream);
++        scissor_known=args.first_scissor==0 && args.scissor_count==1;
++        if (scissor_known) scissor=*reinterpret_cast<const VkRect2D*>(
++            reinterpret_cast<const uint8_t*>(stream)+rex::align(sizeof(ArgsVkSetScissor),alignof(VkRect2D)));
++      } break;
++      case Command::kVkDraw:
++      case Command::kVkDrawIndexed:
++        if (!scissor_known) safe=false;
++        else include(scissor);
++        break;
++      case Command::kVkClearAttachments: {
++        const auto& args=*reinterpret_cast<const ArgsVkClearAttachments*>(stream);
++        size_t offset=rex::align(sizeof(ArgsVkClearAttachments),alignof(VkClearAttachment));
++        offset=rex::align(offset+sizeof(VkClearAttachment)*args.attachment_count,alignof(VkClearRect));
++        const auto* rects=reinterpret_cast<const VkClearRect*>(reinterpret_cast<const uint8_t*>(stream)+offset);
++        for (uint32_t i=0;i<args.rect_count;++i) include(rects[i].rect);
++      } break;
++      case Command::kVkEndRendering: finish();break;
++      case Command::kVkBeginRenderPass:
++      case Command::kVkEndRenderPass:
++        if (begin) { safe=false;finish(); }
++        break;
++      default: break; // Other supported commands do not write framebuffer pixels.
++    }
++    stream+=header.arguments_size_elements;remaining-=header.arguments_size_elements;
++  }
++  // A missing EndRendering must not change the pass.
++  if (begin) { safe=false;finish(); }
++  return stats;
+ }
+ 
+ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {

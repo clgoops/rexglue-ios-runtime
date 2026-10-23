@@ -1,0 +1,17 @@
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -473,7 +473,14 @@
+       uint32_t title_id = runtime_->kernel_state()->title_id();
+       if (title_id != 0) {
+         REXLOG_INFO("Initializing shader storage for title {:08X}...", title_id);
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++        // Queue on the GPU command thread before resuming the guest. Vulkan
++        // completes preload there before processing draws; keep UIKit pumping
++        // rather than waiting on its fence through a potentially long warmup.
++        graphics_system->InitializeShaderStorage(runtime_->cache_root(), title_id, false);
++#else
+         graphics_system->InitializeShaderStorage(runtime_->cache_root(), title_id, true);
++#endif
+       }
+     }
+

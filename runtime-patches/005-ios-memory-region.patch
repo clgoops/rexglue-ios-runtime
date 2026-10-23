@@ -1,0 +1,55 @@
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39..837135a 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -21,7 +21,10 @@
+ 
+ #if REX_PLATFORM_MAC
+ #include <mach/mach.h>
++#include <TargetConditionals.h>
++#if !TARGET_OS_IPHONE
+ #include <mach/mach_vm.h>
++#endif
+ #include <mach/vm_region.h>
+ #endif  // REX_PLATFORM_MAC
+ 
+@@ -375,24 +378,36 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+ 
+ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+ #if REX_PLATFORM_MAC
+-  mach_vm_address_t address = reinterpret_cast<mach_vm_address_t>(base_address);
++#if TARGET_OS_IPHONE
++  vm_address_t address = reinterpret_cast<vm_address_t>(base_address);
++  vm_size_t region_size = 0;
++#else
++  mach_vm_address_t address = reinterpret_cast<uintptr_t>(base_address);
+   mach_vm_size_t region_size = 0;
++#endif
+   vm_region_basic_info_data_64_t info;
+   mach_msg_type_number_t info_count = VM_REGION_BASIC_INFO_COUNT_64;
+   mach_port_t object_name;
+ 
+   kern_return_t kr =
++#if TARGET_OS_IPHONE
++      vm_region_64(mach_task_self(), &address, &region_size, VM_REGION_BASIC_INFO_64,
++#else
+       mach_vm_region(mach_task_self(), &address, &region_size, VM_REGION_BASIC_INFO_64,
++#endif
+                      reinterpret_cast<vm_region_info_t>(&info), &info_count, &object_name);
+   if (kr != KERN_SUCCESS) {
+     return false;
+   }
+-  if (address > reinterpret_cast<mach_vm_address_t>(base_address)) {
++  if (object_name != MACH_PORT_NULL) {
++    mach_port_deallocate(mach_task_self(), object_name);
++  }
++  if (address > reinterpret_cast<uintptr_t>(base_address)) {
+     return false;
+   }
+ 
+   length = static_cast<size_t>((address + region_size) -
+-                               reinterpret_cast<mach_vm_address_t>(base_address));
++                               reinterpret_cast<uintptr_t>(base_address));
+ 
+   if ((info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
+       (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) {

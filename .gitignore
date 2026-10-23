@@ -1,0 +1,8 @@
+sdk/
+runtime-build/
+runtime-artifact/
+*.log
+*.ios.o
+render-area-tests*
+transfer-tests
+__pycache__/

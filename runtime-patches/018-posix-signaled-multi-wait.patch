@@ -1,0 +1,143 @@
+diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
+--- a/src/core/threading_posix.cpp
++++ b/src/core/threading_posix.cpp
+@@ -267,6 +267,42 @@
+ }
+ #endif  // __APPLE__
+ 
++// A generation counter closes the race between checking several objects and
++// blocking. A signal wakes multi-object waiters immediately, rather than waiting
++// for a one-millisecond polling tick. Never hold this mutex while locking an
++// individual condition: signalers notify while holding their condition mutex.
++class MultiWaitNotification {
++ public:
++  uint64_t Snapshot() {
++    std::lock_guard lock(mutex_);
++    return generation_;
++  }
++  void Notify() {
++    {
++      std::lock_guard lock(mutex_);
++      ++generation_;
++    }
++    condition_.notify_all();
++  }
++  void WaitUntil(uint64_t observed, std::chrono::steady_clock::time_point deadline) {
++    std::unique_lock lock(mutex_);
++    auto changed = [&] { return generation_ != observed; };
++    if (deadline == std::chrono::steady_clock::time_point::max())
++      condition_.wait(lock, changed);
++    else
++      condition_.wait_until(lock, deadline, changed);
++  }
++ private:
++  std::mutex mutex_;
++  std::condition_variable condition_;
++  uint64_t generation_ = 0;
++};
++
++static MultiWaitNotification& GetMultiWaitNotification() {
++  static MultiWaitNotification notification;
++  return notification;
++}
++
+ class PosixConditionBase {
+  public:
+   PosixConditionBase() {
+@@ -335,13 +371,13 @@
+                         ? std::chrono::steady_clock::time_point::max()
+                         : start_time + timeout;
+ 
++    std::vector<std::unique_lock<std::mutex>> locks;
++    locks.reserve(handles.size());
+     while (true) {
++      const auto observed = GetMultiWaitNotification().Snapshot();
+       size_t first_signaled = std::numeric_limits<size_t>::max();
+       bool condition_met = false;
+       bool all_locked = true;
+-
+-      std::vector<std::unique_lock<std::mutex>> locks;
+-      locks.reserve(handles.size());
+ 
+       for (size_t i = 0; i < handles.size(); ++i) {
+ #if REX_PLATFORM_LINUX
+@@ -367,6 +403,8 @@
+ 
+       if (!all_locked) {
+         locks.clear();
++        if (std::chrono::steady_clock::now() >= end_time)
++          return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
+         std::this_thread::yield();
+         continue;
+       }
+@@ -411,13 +449,7 @@
+         return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
+       }
+ 
+-      if (timeout == std::chrono::milliseconds::max()) {
+-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+-      } else {
+-        // Preserve sub-millisecond remainders. Truncating a 1 ms alertable
+-        // slice to whole milliseconds turns almost every sleep into a spin.
+-        std::this_thread::sleep_until(std::min(end_time, now + std::chrono::milliseconds(1)));
+-      }
++      GetMultiWaitNotification().WaitUntil(observed, end_time);
+     }
+   }
+ 
+@@ -450,6 +482,7 @@
+     auto lock = std::unique_lock<std::mutex>(mutex_);
+     signal_ = true;
+     cond_.notify_all();
++    GetMultiWaitNotification().Notify();
+     return true;
+   }
+ 
+@@ -487,6 +520,7 @@
+     }
+     count_ += release_count;
+     cond_.notify_all();
++    GetMultiWaitNotification().Notify();
+     return true;
+   }
+ 
+@@ -495,6 +529,7 @@
+   inline void post_execution() override {
+     count_--;
+     cond_.notify_all();
++    GetMultiWaitNotification().Notify();
+   }
+   uint32_t count_;
+   const uint32_t maximum_count_;
+@@ -519,6 +554,7 @@
+       // Free to be acquired by another thread
+       if (count_ == 0) {
+         cond_.notify_all();
++        GetMultiWaitNotification().Notify();
+       }
+       return true;
+     }
+@@ -551,6 +587,7 @@
+     std::lock_guard<std::mutex> lock(mutex_);
+     signal_ = true;
+     cond_.notify_all();
++    GetMultiWaitNotification().Notify();
+     return true;
+   }
+ 
+@@ -979,6 +1016,7 @@
+       exit_code_ = exit_code;
+       signaled_ = true;
+       cond_.notify_all();
++      GetMultiWaitNotification().Notify();
+     }
+     if (is_current_thread) {
+       pthread_exit(reinterpret_cast<void*>(exit_code));
+@@ -1449,6 +1487,7 @@
+     thread->handle_.exit_code_ = 0;
+     thread->handle_.signaled_ = true;
+     thread->handle_.cond_.notify_all();
++    GetMultiWaitNotification().Notify();
+   }
+ 
+   current_thread_ = nullptr;

@@ -1,0 +1,16 @@
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e..aad2e4e 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -168,7 +168,11 @@ bool ReXApp::SetupEnvironment() {
+                                         log_level_str, category_levels);
+   if (log_file_cvar.empty()) {
+     log_config.app_name = std::string(GetName());
++#if defined(__APPLE__) && TARGET_OS_IPHONE
++    log_config.log_dir = (user_data_root_ / "logs").string();
++#else
+     log_config.log_dir = (exe_dir / "logs").string();
++#endif
+   }
+ 
+   rex::InitLogging(log_config);
