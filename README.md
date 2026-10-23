@@ -16,6 +16,18 @@ runtime dependency. Artifacts contain the two runtime libraries, license
 notices and checksums. They are retained for one day. Device signing and game
 packaging happen separately on the owner's Windows machine.
 
+The current runtime adds local SPIR-V register canonicalization before shader
+module creation: scalar replacement, local access conversion, load/store
+elimination, SSA rewriting and dead local work removal. It validates input and
+output and checks preservation of globals, bindings, entry points, execution
+modes and specialization constants. Failed validation or driver module creation
+retains/retries the original module. It does not enable float relaxation or
+half precision. The pinned SPIRV-Tools implementation is statically linked;
+upstream license notices are collected with the runtime artifacts. The Mac job
+tests the optimizer and actual module-creation fallback and compiles them for iOS.
+Device rendering and performance remain unverified. Sparse pass sampling now
+defaults Off; ordinary performance metrics remain available.
+
 The transfer-bounds build compiled successfully and was reported visually
 correct, with no useful performance gain. The current diagnostic adds sparse
 same-queue completion-boundary samples for rendering and outside-pass work.

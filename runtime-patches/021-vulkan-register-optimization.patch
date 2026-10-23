@@ -1,0 +1,208 @@
+diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
+--- a/thirdparty/CMakeLists.txt
++++ b/thirdparty/CMakeLists.txt
+@@ -128,3 +128,3 @@
+ # Uses cabextract version which has all needed headers in one place
+-set(MSPACK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libmspack/cabextract/mspack")
++set(MSPACK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libmspack/libmspack/mspack")
+ add_library(mspack STATIC
+@@ -281,3 +281,3 @@
+ 
+-# Disable graphics APIs (unused without video) — only on non-Apple
++# Disable graphics APIs (unused without video) ? only on non-Apple
+ set(SDL_OPENGL OFF CACHE BOOL "" FORCE)
+@@ -328,2 +328,12 @@
+         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
++
++    # Build the pinned validator/optimizer for local register canonicalization.
++    set(SPIRV-Headers_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/spirv-headers")
++    set(SPIRV_SKIP_TESTS ON CACHE BOOL "" FORCE)
++    set(SPIRV_SKIP_EXECUTABLES ON CACHE BOOL "" FORCE)
++    set(SKIP_SPIRV_TOOLS_INSTALL ON CACHE BOOL "" FORCE)
++    set(SPIRV_TOOLS_BUILD_STATIC ON CACHE BOOL "" FORCE)
++    add_subdirectory(spirv-tools EXCLUDE_FROM_ALL)
++    set_target_properties(SPIRV-Tools-static SPIRV-Tools-opt PROPERTIES
++        CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+ 
+@@ -704 +714,2 @@
+     FOLDER "FFmpeg")
++
+diff --git a/src/graphics/CMakeLists.txt b/src/graphics/CMakeLists.txt
+--- a/src/graphics/CMakeLists.txt
++++ b/src/graphics/CMakeLists.txt
+@@ -52,2 +52,3 @@
+     vulkan/shader.cpp
++    vulkan/spirv_register_optimizer.cpp
+     vulkan/shared_memory.cpp
+@@ -144,2 +145,3 @@
+         glslang::SPIRV
++        SPIRV-Tools-opt
+         GPUOpen::VulkanMemoryAllocator
+diff --git a/src/graphics/vulkan/shader.cpp b/src/graphics/vulkan/shader.cpp
+--- a/src/graphics/vulkan/shader.cpp
++++ b/src/graphics/vulkan/shader.cpp
+@@ -14,2 +14,4 @@
+ #include <rex/assert.h>
++#include <rex/graphics/flags.h>
++#include <rex/graphics/vulkan/spirv_register_optimizer.h>
+ #include <rex/graphics/vulkan/shader.h>
+@@ -38,2 +40,16 @@
+       static_cast<const VulkanShader&>(shader()).vulkan_device_;
++  std::vector<uint32_t> optimized;
++  SpirvRegisterStats optimization_stats;
++  std::string optimization_error;
++  const auto original=std::span(reinterpret_cast<const uint32_t*>(translated_binary().data()),
++                                translated_binary().size()/sizeof(uint32_t));
++  bool use_optimized=REXCVAR_GET(vulkan_optimize_registers) &&
++      OptimizeSpirvRegisters(original,optimized,optimization_stats,optimization_error);
++  if (REXCVAR_GET(vulkan_optimize_registers)) {
++    REXGPU_INFO("Shader register optimization: shader={:016X} modification={:016X} accepted={} words={}/{} locals={}/{} loads={}/{} stores={}/{} reason={}",
++      shader().ucode_data_hash(),modification(),use_optimized,original.size(),use_optimized?optimized.size():original.size(),
++      optimization_stats.function_variables_before,optimization_stats.function_variables_after,
++      optimization_stats.loads_before,optimization_stats.loads_after,optimization_stats.stores_before,optimization_stats.stores_after,
++      use_optimized?"validated":optimization_error);
++  }
+   VkShaderModuleCreateInfo shader_module_create_info;
+@@ -42,4 +58,4 @@
+   shader_module_create_info.flags = 0;
+-  shader_module_create_info.codeSize = translated_binary().size();
+-  shader_module_create_info.pCode = reinterpret_cast<const uint32_t*>(translated_binary().data());
++  shader_module_create_info.codeSize = use_optimized ? optimized.size()*sizeof(uint32_t) : translated_binary().size();
++  shader_module_create_info.pCode = use_optimized ? optimized.data() : original.data();
+   if (vulkan_device->functions().vkCreateShaderModule(vulkan_device->device(),
+@@ -47,2 +63,10 @@
+                                                       &shader_module_) != VK_SUCCESS) {
++    if (use_optimized) {
++      shader_module_create_info.codeSize=translated_binary().size();shader_module_create_info.pCode=original.data();
++      if (vulkan_device->functions().vkCreateShaderModule(vulkan_device->device(),&shader_module_create_info,nullptr,
++                                                         &shader_module_)==VK_SUCCESS) {
++        REXGPU_WARN("Shader register optimization: driver rejected optimized module {:016X}; original restored",shader().ucode_data_hash());
++        return shader_module_;
++      }
++    }
+     REXGPU_ERROR(
+diff --git a/src/graphics/vulkan/spirv_register_optimizer.cpp b/src/graphics/vulkan/spirv_register_optimizer.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/graphics/vulkan/spirv_register_optimizer.cpp
+@@ -0,0 +1,70 @@
++#include <rex/graphics/vulkan/spirv_register_optimizer.h>
++#include <spirv-tools/libspirv.hpp>
++#include <spirv-tools/optimizer.hpp>
++#include <spirv/unified1/spirv.hpp>
++#include <algorithm>
++#include <set>
++
++namespace rex::graphics::vulkan {
++namespace {
++using Contract=std::vector<std::vector<uint32_t>>;
++bool Inspect(std::span<const uint32_t> words, Contract& contract, uint32_t& loads,
++             uint32_t& stores, uint32_t& locals) {
++  if (words.size()<5 || words[0]!=spv::MagicNumber) return false;
++  std::set<uint32_t> global_ids;
++  for (size_t i=5;i<words.size();) {
++    const uint32_t size=words[i]>>16, op=words[i]&0xffff;
++    if (!size || size>words.size()-i) return false;
++    if ((op==spv::OpVariable && size>=4 && words[i+3]!=spv::StorageClassFunction) ||
++        (op>=spv::OpSpecConstantTrue && op<=spv::OpSpecConstantOp && size>=3))
++      global_ids.insert(words[i+2]);
++    i+=size;
++  }
++  for (size_t i=5;i<words.size();) {
++    const uint32_t size=words[i]>>16, op=words[i]&0xffff;
++    if (!size || size>words.size()-i) return false;
++    if (op==spv::OpLoad) ++loads;
++    if (op==spv::OpStore) ++stores;
++    if (op==spv::OpVariable && size>=4 && words[i+3]==spv::StorageClassFunction) ++locals;
++    const bool preserve=op==spv::OpEntryPoint || op==spv::OpExecutionMode || op==spv::OpExecutionModeId ||
++      (op==spv::OpVariable && size>=4 && words[i+3]!=spv::StorageClassFunction) ||
++      (op==spv::OpDecorate && size>=3 && global_ids.contains(words[i+1])) ||
++      op==spv::OpMemberDecorate ||
++      (op>=spv::OpSpecConstantTrue && op<=spv::OpSpecConstantOp);
++    if (preserve) contract.emplace_back(words.begin()+i,words.begin()+i+size);
++    i+=size;
++  }
++  std::sort(contract.begin(),contract.end());return true;
++}
++}
++bool OptimizeSpirvRegisters(std::span<const uint32_t> input, std::vector<uint32_t>& output,
++                            SpirvRegisterStats& stats, std::string& error) {
++  output.clear();stats={};error.clear();Contract before,after;
++  if (!Inspect(input,before,stats.loads_before,stats.stores_before,stats.function_variables_before)) {
++    error="Malformed SPIR-V";return false;
++  }
++  auto consumer=[&](spv_message_level_t,const char*,const spv_position_t&,const char* message) {
++    if (error.empty() && message) error=std::string(message).substr(0,300);
++  };
++  spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_2);
++  optimizer.SetMessageConsumer(consumer);
++  // Local register representation only: no half conversion, floating-point
++  // relaxation/reassociation, interface removal, loop unrolling or math folding.
++  optimizer.RegisterPass(spvtools::CreateScalarReplacementPass(256));
++  optimizer.RegisterPass(spvtools::CreateLocalAccessChainConvertPass());
++  optimizer.RegisterPass(spvtools::CreateLocalSingleBlockLoadStoreElimPass());
++  optimizer.RegisterPass(spvtools::CreateLocalSingleStoreElimPass());
++  optimizer.RegisterPass(spvtools::CreateSSARewritePass());
++  optimizer.RegisterPass(spvtools::CreateDeadInsertElimPass());
++  optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass(true, false));
++  spvtools::OptimizerOptions options;
++  options.set_run_validator(true);options.set_preserve_bindings(true);options.set_preserve_spec_constants(true);
++  std::vector<uint32_t> candidate;
++  if (!optimizer.Run(input.data(),input.size(),&candidate,options)) return false;
++  spvtools::SpirvTools validator(SPV_ENV_VULKAN_1_2);validator.SetMessageConsumer(consumer);
++  if (!validator.Validate(candidate) || !Inspect(candidate,after,stats.loads_after,
++      stats.stores_after,stats.function_variables_after)) return false;
++  if (before!=after) {error="Shader interface/execution contract changed";return false;}
++  output=std::move(candidate);error.clear();return true;
++}
++}  // namespace rex::graphics::vulkan
+diff --git a/include/rex/graphics/vulkan/spirv_register_optimizer.h b/include/rex/graphics/vulkan/spirv_register_optimizer.h
+new file mode 100644
+--- /dev/null
++++ b/include/rex/graphics/vulkan/spirv_register_optimizer.h
+@@ -0,0 +1,16 @@
++#pragma once
++#include <cstdint>
++#include <span>
++#include <string>
++#include <vector>
++
++namespace rex::graphics::vulkan {
++struct SpirvRegisterStats {
++  uint32_t loads_before=0, loads_after=0, stores_before=0, stores_after=0;
++  uint32_t function_variables_before=0, function_variables_after=0;
++};
++// Output is committed only after validation and preservation of global variables,
++// execution modes, entry points and specialization constants. Failure leaves it empty.
++bool OptimizeSpirvRegisters(std::span<const uint32_t> input, std::vector<uint32_t>& output,
++                            SpirvRegisterStats& stats, std::string& error);
++}  // namespace rex::graphics::vulkan
+diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
+--- a/src/graphics/flags.cpp
++++ b/src/graphics/flags.cpp
+@@ -16,3 +16,5 @@
+ // Diagnostic build: the existing performance toggle gates sparse pass samples.
+-REXCVAR_DEFINE_BOOL(vulkan_pass_timing, true, "GPU", "Record bounded rotating GPU pass timing samples while performance metrics are enabled.");
++REXCVAR_DEFINE_BOOL(vulkan_pass_timing, false, "GPU", "Record bounded rotating GPU pass timing samples while performance metrics are enabled.");
++
++REXCVAR_DEFINE_BOOL(vulkan_optimize_registers, true, "GPU", "Canonicalize function-local SPIR-V registers before Metal translation, with validation fallback.");
+ 
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -82,2 +82,3 @@
+ REXCVAR_DECLARE(bool, vulkan_pass_timing);
++REXCVAR_DECLARE(bool, vulkan_optimize_registers);
+ REXCVAR_DECLARE(bool, vulkan_async_skip_incomplete_frames);
+diff --git a/src/graphics/vulkan/render_target_cache.cpp b/src/graphics/vulkan/render_target_cache.cpp
+--- a/src/graphics/vulkan/render_target_cache.cpp
++++ b/src/graphics/vulkan/render_target_cache.cpp
+@@ -969,5 +969,6 @@
+   InitializeCommon();
+-  REXGPU_INFO("Vulkan render targets: backend={}, bounded_ownership_transfers={}",
++  REXGPU_INFO("Vulkan render targets: backend={}, bounded_ownership_transfers={}, register_optimizer={}",
+               path_ == Path::kHostRenderTargets ? "fbo" : "fsi",
+-              path_ == Path::kHostRenderTargets && REXCVAR_GET(vulkan_tight_render_area));
++              path_ == Path::kHostRenderTargets && REXCVAR_GET(vulkan_tight_render_area),
++              REXCVAR_GET(vulkan_optimize_registers));
+   return true;

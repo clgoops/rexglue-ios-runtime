@@ -44,7 +44,9 @@ jobs:
       - name: Configure iOS runtime
         run: |
           set -euo pipefail
+          printf '\nadd_subdirectory("../optimizer-tests" "register-optimizer-probe")\n' >> sdk/CMakeLists.txt
           cmake -S sdk -B runtime-build -G Ninja \
+            -DREXSDK_DIR="$GITHUB_WORKSPACE/sdk" \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_SYSTEM_PROCESSOR=arm64 -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
@@ -55,7 +57,14 @@ jobs:
       - name: Build runtime and graphics library
         run: |
           set -euo pipefail
-          cmake --build runtime-build --target rexgpu-xenos --parallel 3 2>&1 | tee build.log
+          cmake --build runtime-build --target rexgpu-xenos register-opt-tests --parallel 3 2>&1 | tee build.log
+      - name: Validate register optimizer and shader-module fallback on Mac
+        run: |
+          set -euo pipefail
+          cmake -S optimizer-tests -B optimizer-host -G Ninja \
+            -DREXSDK_DIR="$GITHUB_WORKSPACE/sdk" -DCMAKE_BUILD_TYPE=Release
+          cmake --build optimizer-host --target register-opt-tests --parallel 3 2>&1 | tee optimizer-build.log
+          ./optimizer-host/register-opt-tests | tee optimizer-tests.log
       - name: Collect and audit open-source libraries
         run: python3 tools/collect-runtime.py sdk runtime-build runtime-artifact
       - uses: actions/upload-artifact@v4
@@ -71,3 +80,5 @@ jobs:
             render-area-tests.log
             pass-profile-tests.log
             render-timing-tests.log
+            optimizer-build.log
+            optimizer-tests.log
