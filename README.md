@@ -85,3 +85,14 @@ LICENSE contains the upstream BSD 3-Clause notice for ReXGlue and the derived
 Xenia portions. Existing upstream and third-party notices apply to their
 respective code. New patch/test helper contributions use the same BSD 3-Clause
 terms. Library artifacts collect upstream license/notice files as well.
+
+## Latest-session diagnostics helper
+
+`diagnostics/` contains a generic Apache-2.0 iOS log-export helper. It exports one
+latest game-session snapshot and admits a performance CSV only when its filename
+timestamp matches that session's Play request within two seconds. Without a game
+session it exports the latest startup. Historical source files stay in place but
+are excluded from the share sheet. No game-specific configuration is published.
+The standalone diagnostics workflow checks file selection on Mac, compiles iOS
+ARM64, and tests the action replacement and single-item UIKit share sheet in Simulator.
+This helper changes diagnostics export only, with no renderer changes.

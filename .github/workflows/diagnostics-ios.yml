@@ -1,0 +1,65 @@
+name: Build latest-session export helper
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'diagnostics/**'
+      - 'tests/latest-session-*'
+      - '.github/workflows/diagnostics-ios.yml'
+permissions:
+  contents: read
+jobs:
+  diagnostics:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit reviewed public inputs
+        run: python3 tools/audit-inputs.py
+      - name: Verify actual file selection and snapshot export on Mac
+        run: |
+          set -euo pipefail
+          xcrun clang++ -std=c++23 -O2 -fobjc-arc -framework Foundation diagnostics/latest-session-export.mm tests/latest-session-export.mm -o latest-export-tests
+          ./latest-export-tests | tee latest-export-tests.log
+      - name: Compile iOS ARM64 export helper
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics-artifact
+          xcrun --sdk iphoneos clang++ -std=c++23 -O2 -fobjc-arc -arch arm64 -miphoneos-version-min=18.0 -dynamiclib -Wl,-install_name,@rpath/libRexLatestSessionExport.dylib -framework Foundation -framework UIKit diagnostics/latest-session-export.mm diagnostics/latest-session-ui.mm -o diagnostics-artifact/libRexLatestSessionExport.dylib
+          shasum -a 256 diagnostics-artifact/libRexLatestSessionExport.dylib > diagnostics-artifact/SHA256.txt
+          otool -L diagnostics-artifact/libRexLatestSessionExport.dylib > diagnostics-artifact/load-commands.txt
+      - name: Verify the actual UIKit action and one-file share sheet
+        run: |
+          set -euo pipefail
+          mkdir -p ExportTest.app
+          python3 - <<'PY'
+          import plistlib,pathlib
+          data=dict(CFBundleIdentifier='org.rexglue.latestexport.test',CFBundleExecutable='ExportTest',CFBundleName='ExportTest',CFBundlePackageType='APPL',CFBundleVersion='1',CFBundleShortVersionString='1.0',MinimumOSVersion='18.0',LSRequiresIPhoneOS=True,UILaunchScreen={})
+          pathlib.Path('ExportTest.app/Info.plist').write_bytes(plistlib.dumps(data))
+          PY
+          xcrun --sdk iphonesimulator clang++ -std=c++23 -O2 -fobjc-arc -DREX_EXPORT_NO_CONSTRUCTOR -arch arm64 -mios-simulator-version-min=18.0 -framework Foundation -framework UIKit diagnostics/latest-session-export.mm diagnostics/latest-session-ui.mm tests/latest-session-ui.mm -o ExportTest.app/ExportTest
+          codesign --force --sign - ExportTest.app
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys;print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]))')
+          device=$(xcrun simctl create LatestExportTest com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro-Max "$runtime")
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" ExportTest.app
+          xcrun simctl launch "$device" org.rexglue.latestexport.test
+          container=$(xcrun simctl get_app_container "$device" org.rexglue.latestexport.test data)
+          for attempt in $(seq 1 45); do
+            [ ! -f "$container/Documents/latest-export-result.json" ] || break
+            sleep 1
+          done
+          cp "$container/Documents/latest-export-result.json" diagnostics-artifact/
+          python3 -c 'import json; r=json.load(open("diagnostics-artifact/latest-export-result.json")); print(r); assert r["passed"]'
+          xcrun simctl io "$device" screenshot diagnostics-artifact/latest-export-share.png
+          xcrun simctl shutdown "$device"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: latest-session-export-helper
+          retention-days: 1
+          path: |
+            diagnostics-artifact/
+            latest-export-tests.log
