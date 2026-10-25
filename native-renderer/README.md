@@ -34,42 +34,28 @@ Implemented:
   native 1x/2x/4x MSAA, integer format views and depth/stencil output. When retained
   host depth is also the destination, a preceding native depth snapshot avoids
   illegal attachment feedback. CPU checks cover 1,836 shader combinations and
-  frame admission. Apple run `40214247006` passed the iOS shader compilation,
+  frame admission. Apple run `40215220850` passed the iOS shader compilation,
   actual Metal transfer pixel cases and iOS ARM64 adapter build. The pixel cases
   cover half-bit reinterpretation with integer views at 1x/2x/4x MSAA and a
   single-sample depth/stencil round trip with retained host-depth snapshot.
   Resolve-to-guest-memory and the live command processor are not connected yet.
 
-First backend validation (`c9564f9`, workflow run `40189292454`) passed 57 CPU
-contracts, their ASan/UBSan run, and 16 actual Metal GPU cases with 134 checks.
-The backend compiled for iOS ARM64 with deployment target 18.0. The downloaded
-report explicitly confirmed a GPU was available. That validation predates the
-shader-conversion additions; their new workflow must validate them separately.
+Latest verified implementation: `264bc35`, Apple workflow run
+[`40215220850`](https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40215220850).
+It passed 72 CPU frame contracts and their ASan/UBSan run, 32 binding checks,
+1,836 ownership shader conversions, 4,019 combined frontend checks, and Apple's
+iOS compilation of 96 SDK host modules plus selected transfer/translator fixtures.
+Actual GPU hardware passed 18 native cases with 153 checks, the SDK gamma/EDRAM
+clear cases, microcode-to-Metal draws with two in-flight constant snapshots, and
+native target transfers at 1x/2x/4x MSAA. GPU conversion buffers also became
+native textures with explicit pitches, offsets and 3D image strides.
 
-The next validated stage (`c428dce`, run `40207921955`) compiled all 96 supported
-SDK host kernels and 27 translator fixtures with Apple's iOS Metal compiler.
-Real GPU pixel checks passed for the SDK gamma pass and compute EDRAM clear,
-including reflected push constants and ordered storage reads. The 16 baseline
-GPU cases passed again. Native renderer, converter, constant and shared-memory
-adapter sources compiled for iOS ARM64. Shared-memory page-watch concurrency
-was not exercised by these GPU cases.
-
-The shader adapter stage (`850df3d`, run `40209298630`) also passed on actual
-Metal hardware: synthetic Xbox microcode was translated by the real SDK, prepared
-through `RexShader`, bound through `RexConstantState`, and rendered to two targets
-with distinct expected colors while both immutable frame snapshots remained
-alive. The 334 translator/constant checks, 32 shader-binding checks, 57 frame
-contracts, sanitizer checks, all 96 supported iOS shader compilations and the
-prior GPU cases passed. The actual shader adapter compiled for iOS ARM64 too.
-These fixtures do not establish Blur frame fidelity or performance.
-
-The target stage (`0af809b`, run `40214247006`) passed 64 frame contracts,
-ASan/UBSan, 32 binding checks, 1,836 ownership shader conversions and 4,019
-combined frontend checks. The earlier Metal cases passed again, followed by
-the native target cases above. The build artifact's iOS ARM64 native backend
-hash is recorded in `VALIDATION.json`. Target ownership now has a native encoder;
-the game factory, command submission, guest texture loading and resolve path
-still require integration. There is no playable native-game IPA from this stage.
+The backend and SDK adapter libraries compiled for iOS ARM64, minimum iOS 18.0.
+The downloaded backend's architecture, deployment target, lack of Vulkan linkage
+and SHA-256 were checked locally. See `VALIDATION.json` for the artifact identity.
+These fixtures do not establish Blur frame fidelity or performance. The game
+factory, command submission, guest texture loading and resolve path still require
+integration. There is no playable native-game IPA from this stage.
 
 Local shader validation converts 96 of 97 pinned SDK host shaders. The remaining
 `passthrough_position_xy_vs` uses vertex attributes; the backend currently uses

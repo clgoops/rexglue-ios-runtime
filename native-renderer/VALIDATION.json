@@ -1,8 +1,8 @@
 {
-  "implementation_commit": "0af809b58bb9dd2f2ae98261166f2f7d3f2ab185",
-  "workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40214247006",
+  "implementation_commit": "264bc358b493c259d561bc7ec0ff1825328741bb",
+  "workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40215220850",
   "target": "iOS ARM64; deployment target 18.0",
-  "cpu_frame_checks": 64,
+  "cpu_frame_checks": 72,
   "cpu_shader_binding_checks": 32,
   "actual_translator_modules": 27,
   "ios_metal_host_modules_compiled": 96,
@@ -15,7 +15,7 @@
   "sdk_gamma_and_compute_clear_pixel_checks": 21,
   "actual_microcode_to_metal_draw_pixels": "passed: two frames with distinct constant snapshots",
   "frame_asan_ubsan": "passed",
-  "native_metal_dylib_sha256": "891285c229622d4bcae6e8547954f202c7fe84a0363332968e552aa95338b34d",
+  "native_metal_dylib_sha256": "c8c67d4c00ed20fc51f2887e2aec546ec6b37e85735d609dcb860a6749bdfadd",
   "live_blur_integration": false,
   "blur_performance_improvement_measured": false,
   "installable_ipa_produced_by_this_stage": false,
@@ -29,5 +29,8 @@
     ],
     "depth_stencil_round_trip": "single-sample with retained host-depth snapshot"
   },
-  "native_target_bridge_compiled_for_ios_arm64": true
+  "native_target_bridge_compiled_for_ios_arm64": true,
+  "native_gpu_cases": 18,
+  "native_gpu_checks": 153,
+  "gpu_conversion_buffer_to_texture": "passed: GPU compute writes, nontrivial row pitch/offset, and 3D image strides"
 }
