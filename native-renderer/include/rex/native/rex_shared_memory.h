@@ -21,6 +21,11 @@ class RexSharedMemory final:public graphics::SharedMemory {
   bool faulted() const {return faulted_;}
   DescriptorResources Descriptor() const;
   std::optional<BufferView> View(uint32_t physical_address,uint32_t length) const;
+  // Joins a range spanning native chunks with ordered GPU copies. No CPU
+  // readback can replace newer GPU resolve or memexport contents.
+  std::optional<BufferView> ContiguousView(uint32_t address,uint32_t length,
+      const std::function<Identity()>&,std::string&);
+  bool CopyBack(uint32_t address,uint32_t length,BufferView source,std::string&);
  protected:
   bool UploadRanges(const std::vector<std::pair<uint32_t,uint32_t>>&) override;
  private:

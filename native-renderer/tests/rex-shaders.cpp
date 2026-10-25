@@ -3,6 +3,8 @@
 #include "rex/native/rex_shader.h"
 #include "rex/native/rex_transfer_shader.h"
 #include "rex/native/rex_target_transfers.h"
+#include "rex/native/rex_resolve.h"
+#include "rex/native/rex_textures.h"
 #if REX_NATIVE_TEST_METAL
 #include "rex/native/metal_backend.h"
 #include "fixtures.h"
@@ -43,6 +45,18 @@ int main(int argc,char** argv) {
   RexConstantState::System system{};
   std::optional<ConvertedShader> gpu_pixel;RexConstantState::Map gpu_map{};
   if(argc>1)std::filesystem::create_directories(argv[1]);
+  for(unsigned format=0;format<64;++format) {
+    auto native=RexTextures::Formats(xenos::TextureFormat(format));
+    for(auto host:{native.format_unsigned,native.format_signed})if(host.format!=Format::Invalid) {
+      check(!host.block_compressed);check(!RexTextures::LoadKernel(host.load_shader).empty());
+    }
+  }
+  for(unsigned format=0;format<16;++format)for(unsigned sample=0;sample<3;++sample) {
+    RexRenderTargets::Key key;key.resource_format=format;key.msaa_samples=xenos::MsaaSamples(sample);
+    if(RexRenderTargets::NativeColorFormat(key.GetColorFormat())==Format::Invalid)continue;
+    ConvertedShader shader;check(RexResolve::DumpShader(key,next(),shader,error));
+    if(argc>1)std::ofstream(std::filesystem::path(argv[1])/("dump-"+std::to_string(format)+"-"+std::to_string(sample)+".metal"))<<shader.shader.msl;
+  }
   // Every legal color storage pair and sample-count pair must lower without
   // falling back to Vulkan. Selected cases are also compiled by Apple's MSL
   // compiler in CI; the local test does not imply a title frame was rendered.
@@ -220,6 +234,11 @@ int main(int argc,char** argv) {
       packet.surfaces={source,destination};
       Pass clear;clear.width=80;clear.height=16;clear.samples=samples;
       Attachment a;a.view={source.id};a.load=Load::Clear;a.color={1,2,0,1};clear.colors[0]=a;packet.commands.push_back(clear);
+      if(samples==1) {
+        Pass partial=clear;partial.colors[0]->load=Load::Load;partial.colors[0]->view.format=Format::RG16Uint;
+        RectClear c;c.colors=1;c.rectangle={0,0,8,8};c.color[0]={0x3800,0x4200,0,0};partial.commands.push_back(c);
+        packet.commands.push_back(partial);
+      }
       RexRenderTargets::OwnershipTransfer t{};
       t.source.pitch_tiles_at_32bpp=t.destination.pitch_tiles_at_32bpp=samples==4?2:1;
       t.source.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_16_16_FLOAT);
@@ -239,6 +258,7 @@ int main(int argc,char** argv) {
           " expected "+std::to_string(expected[c])+" got "+std::to_string(actual);
         check(actual==unsigned(expected[c]));
       }
+      if(samples==1) {const int partial[]={0,56,0,66};for(unsigned c=0;c<4;++c)check(std::to_integer<uint8_t>(pixels[(2*80+2)*4+c])==partial[c]);}
     }
     // Host depth is the destination: preserve its full float32 value through
     // a separate native snapshot before the ownership pass attaches it.
@@ -268,6 +288,34 @@ int main(int argc,char** argv) {
       for(unsigned c=0;c<4;++c)check(std::abs(int(std::to_integer<uint8_t>(pixels[(8*80+40)*4+c]))-expected[c])<=1);
     }
     std::cout<<"Native target transfer pixels passed: half bits, integer views, 1x/2x/4x MSAA, depth/stencil and host-depth snapshot\n";
+    {
+      Frame packet;packet.sequence=30;auto source=test::Target(1),destination=test::Target(2);
+      source.id=next();destination.id=next();source.width=destination.width=80;source.height=destination.height=16;
+      source.owner=std::make_shared<const Identity>(source.id);destination.owner=std::make_shared<const Identity>(destination.id);
+      packet.surfaces={source,destination};Pass clear;clear.width=80;clear.height=16;
+      Attachment a;a.view={source.id};a.load=Load::Clear;a.color={.25,.5,.75,1};clear.colors[0]=a;packet.commands.push_back(clear);
+      BufferStorage edram{next(),xenos::kEdramSizeBytes,true,{}};edram.owner=std::make_shared<const Identity>(edram.id);
+      RexRenderTargets::Key key;key.pitch_tiles_at_32bpp=1;key.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8);
+      RexResolve resolve(next);check(resolve.Dump(packet,key,source,edram,1,0,1,1,error));
+      BufferStorage staging{next(),80*16*4,true,{}};staging.owner=std::make_shared<const Identity>(staging.id);packet.buffer_storage.push_back(staging);
+      ConvertedShader load;auto pair=RexTextures::Formats(xenos::TextureFormat::k_8_8_8_8);
+      check(ConvertSpirv(RexTextures::LoadKernel(pair.format_unsigned.load_shader),next(),Stage::Compute,"main",load,error));
+      RexTextures::LoadParams params{};params.is_tiled_3d_endian_scale=(1u<<4)|(1u<<7);
+      params.guest_pitch_aligned=320;params.size_blocks[0]=80;params.size_blocks[1]=16;params.size_blocks[2]=1;
+      params.host_pitch=320;params.height_texels=16;
+      auto bytes=std::make_shared<std::vector<std::byte>>(256);memcpy(bytes->data(),&params,sizeof(params));
+      Buffer constants{next(),bytes,true};packet.buffers.push_back(constants);packet.shaders.push_back(load.shader);
+      Dispatch d;d.shader=load.shader.id;d.threads=load.workgroup_size;d.groups={3,1,1};std::optional<Buffer> aux;
+      std::vector<DescriptorResources> resources={{ResourceSource::Descriptor,0,0,{{staging.id,0,staging.size}},{},{}},
+        {ResourceSource::Descriptor,1,0,{{edram.id,0,edram.size}},{},{}},
+        {ResourceSource::PushConstants,0,0,{{constants.id,0,256}},{},{}}};
+      check(BindConverted(load,resources,next(),d.bindings,aux,error));if(aux)packet.buffers.push_back(*aux);
+      packet.commands.push_back(d);packet.commands.push_back(BufferToTexture{{staging.id,0,staging.size},{destination.id},320,0,0,0,80,16});
+      check(backend.Submit(std::make_shared<const Frame>(std::move(packet)),{},error));check(backend.Drain(std::chrono::seconds(30),error));
+      auto pixels=backend.ReadRGBA8({destination.id},error);check(pixels.size()==80*16*4);const int expected[]={64,128,191,255};
+      for(unsigned c=0;c<4;++c)check(std::abs(int(std::to_integer<uint8_t>(pixels[(8*80+40)*4+c]))-expected[c])<=1);
+      std::cout<<"Native target -> SDK EDRAM dump -> SDK texture conversion -> native texture pixels passed\n";
+    }
   }
 #endif
 }

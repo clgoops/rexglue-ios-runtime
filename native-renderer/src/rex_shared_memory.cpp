@@ -47,6 +47,34 @@ std::optional<BufferView> RexSharedMemory::View(uint32_t start,uint32_t length) 
   if(length>chunk_size_-offset)return {}; // The caller must split and rebase its kernel explicitly.
   return BufferView{chunks_[chunk].id,offset,length};
 }
+std::optional<BufferView> RexSharedMemory::ContiguousView(uint32_t start,uint32_t length,
+    const std::function<Identity()>& next,std::string& error) {
+  if(auto existing=View(start,length))return existing;
+  if(!frame_ || faulted_ || !length || start>=kBufferSize || length>kBufferSize-start) {
+    error="invalid native contiguous shared-memory range";return {};
+  }
+  BufferStorage scratch{next(),length,true,{}};scratch.owner=std::make_shared<const Identity>(scratch.id);
+  frame_->buffer_storage.push_back(scratch);uint32_t copied=0;
+  while(copied<length) {
+    uint32_t address=start+copied,amount=std::min(length-copied,chunk_size_-address%chunk_size_);
+    auto source=View(address,amount);if(!source) {error="native shared-memory chunk mapping failed";return {};}
+    frame_->commands.push_back(BufferCopy{*source,{scratch.id,copied,amount},amount});copied+=amount;
+  }
+  return BufferView{scratch.id,0,length};
+}
+bool RexSharedMemory::CopyBack(uint32_t start,uint32_t length,BufferView source,std::string& error) {
+  if(!frame_ || faulted_ || !length || start>=kBufferSize || length>kBufferSize-start || source.length<length) {
+    error="invalid GPU shared-memory writeback";return false;
+  }
+  uint32_t copied=0;
+  while(copied<length) {
+    uint32_t address=start+copied,amount=std::min(length-copied,chunk_size_-address%chunk_size_);
+    auto dest=View(address,amount);if(!dest) {error="GPU shared-memory writeback chunk is unavailable";return false;}
+    BufferView from{source.buffer,source.offset+copied,amount};
+    if(from!=*dest)frame_->commands.push_back(BufferCopy{from,*dest,amount});copied+=amount;
+  }
+  return true;
+}
 bool RexSharedMemory::UploadRanges(const std::vector<std::pair<uint32_t,uint32_t>>& pages) {
   if(!frame_ || faulted_)return false;
   struct Segment {uint32_t start,length;BufferView destination;std::shared_ptr<std::vector<std::byte>> bytes;};

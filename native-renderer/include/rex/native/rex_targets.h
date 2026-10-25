@@ -2,8 +2,11 @@
 #pragma once
 #include "rex_draw_state.h"
 #include <rex/graphics/pipeline/render_target/cache.h>
+namespace rex::graphics {class TextureCache;}
 namespace rex::native {
 class RexTargetTransfers;
+class RexResolve;
+class RexSharedMemory;
 // Retains the SDK's EDRAM ownership tracker. Native images are allocated from
 // its exact keys and dimensions; a plain framebuffer address is not an alias.
 class RexRenderTargets final:public graphics::RenderTargetCache {
@@ -35,6 +38,8 @@ class RexRenderTargets final:public graphics::RenderTargetCache {
   RexDrawProfile Profile() const;
   static Format NativeColorFormat(graphics::xenos::ColorRenderTargetFormat);
   bool faulted() const {return faulted_;}
+  bool Resolve(Frame&,const memory::Memory&,RexSharedMemory&,graphics::TextureCache&,
+      uint32_t& written_address,uint32_t& written_length,std::string&);
  protected:
   bool IsGammaFormatHostStorageSeparate() const override {return false;}
   uint32_t GetMaxRenderTargetWidth() const override {return 16384;}
@@ -47,6 +52,8 @@ class RexRenderTargets final:public graphics::RenderTargetCache {
   std::function<Identity()> next_id_;
   TransferEncoder encode_;
   std::unique_ptr<RexTargetTransfers> transfers_;
+  std::unique_ptr<RexResolve> resolves_;
+  std::optional<BufferStorage> edram_;
   bool initialized_=false,faulted_=false;
 };
 } // namespace rex::native

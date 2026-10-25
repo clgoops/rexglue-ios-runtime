@@ -91,14 +91,18 @@ int main(){@autoreleasepool {
   }
   {
     MetalBackend backend;Frame f;f.sequence=1;auto image=Target(1);image.renderable=false;f.surfaces={image};
-    f.buffer_storage={{Id(500),2048,true,std::make_shared<const int>(1)}};
+    f.buffer_storage={{Id(500),2048,true,std::make_shared<const int>(1)},{Id(501),2048,true,std::make_shared<const int>(2)}};
     Shader shader;shader.id=Id(100);shader.stage=Stage::Compute;shader.entry="compute_main";
     shader.arguments={{ArgumentKind::Buffer,0,1,2048,4,TextureKind::TwoD,false,true}};
     shader.msl="#include <metal_stdlib>\nusing namespace metal;kernel void compute_main(device uint* data[[buffer(0)]],uint2 p[[thread_position_in_grid]]){if(p.x<16&&p.y<16)data[4+p.y*20+p.x]=0xff00ff00u;}";
     f.shaders={shader};Dispatch dispatch;dispatch.shader=shader.id;dispatch.groups={2,2,1};dispatch.threads={8,8,1};
     dispatch.bindings.buffers={{0,{Id(500),0,2048}}};f.commands.push_back(dispatch);
-    f.commands.push_back(BufferToTexture{{Id(500),16,1280},View(1),80,0,0,0,16,16});
-    Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{0,255,0,255});Done("GPU conversion buffer becomes a texture with explicit row pitch and offset");
+    f.commands.push_back(BufferCopy{{Id(500),0,2048},{Id(501),0,2048},2048});
+    f.commands.push_back(BufferToTexture{{Id(501),16,1280},View(1),80,0,0,0,16,16});
+    Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{0,255,0,255});
+    auto read=backend.ReadBuffer({Id(501),16,4},failure);Check(read.size()==4);uint32_t word;std::memcpy(&word,read.data(),4);Check(word==0xff00ff00u);
+    Check(backend.DeviceCapabilities().max_buffer_length>=256ull*1024*1024);
+    Done("GPU conversion buffer becomes a texture with explicit row pitch and offset");
   }
   {
     MetalBackend backend;Frame f;f.sequence=1;auto image=Target(1);image.renderable=false;image.kind=TextureKind::ThreeD;image.depth=2;f.surfaces={image};

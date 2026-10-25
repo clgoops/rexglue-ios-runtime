@@ -79,6 +79,10 @@ int main(){
   joined.commands.emplace_back(copy);next.colors[0]->load=Load::Load;AppendPass(joined,next);require(joined.commands.size()==4);
   joined.commands.clear();AppendPass(joined,first);next.colors[0]->view.level=1;AppendPass(joined,next);require(joined.commands.size()==2);
   joined.commands.clear();first.colors[0]->store=Store::Discard;AppendPass(joined,first);next.colors[0]->view.level=0;AppendPass(joined,next);require(joined.commands.size()==2);
+  joined.commands.clear();first=ColorPass(1);first.mergeable=false;AppendPass(joined,first);AppendPass(joined,next);require(joined.commands.size()==2);
+  Frame buffers_only;buffers_only.sequence=1;buffers_only.buffer_storage={{Id(1),32,true,owner},{Id(2),32,true,owner}};
+  buffers_only.commands.push_back(BufferCopy{{Id(1),0,16},{Id(2),0,16},16});require(Validate(buffers_only,error));
+  std::get<BufferCopy>(buffers_only.commands[0]).destination={Id(1),8,16};require(!Validate(buffers_only,error));
   require(CompatibleView(Format::RGBA8,Format::RGBA8Srgb));require(!CompatibleView(Format::RGBA8,Format::BGRA8));
   require(CompatibleView(Format::RG16Float,Format::RG16Uint));
   require(CompatibleView(Format::RGBA16Snorm,Format::RGBA16Uint));

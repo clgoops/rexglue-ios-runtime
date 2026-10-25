@@ -30,6 +30,7 @@ struct BackendStats {
   uint64_t pipeline_compiles=0,pipeline_hits=0,avoided_bindings=0;
   uint64_t surface_bytes=0,geometry_bytes=0,constant_bytes=0;
 };
+struct Capabilities {uint64_t max_buffer_length=0;bool float32_filtering=false,packed_16bit_textures=false;};
 class MetalBackend {
  public:
   explicit MetalBackend(const BackendOptions& options={});
@@ -45,6 +46,8 @@ class MetalBackend {
   // locks; presentation must not pass through this CPU path.
   std::vector<std::byte> ReadRGBA8(const SurfaceView&,std::string& error);
   BackendStats Stats() const;
+  Capabilities DeviceCapabilities() const;
+  std::vector<std::byte> ReadBuffer(const BufferView&,std::string& error);
   // Opaque CAMetalLayer owned by the UIKit host, passed without API types into
   // the frame contract. Null disables presentation. The layer and backend use
   // the same device. Submission presents frame.output through a native pass.

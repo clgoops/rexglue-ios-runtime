@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rex/native/rex_targets.h"
 #include "rex/native/rex_target_transfers.h"
+#include "rex/native/rex_resolve.h"
 #include <algorithm>
 namespace rex::native {
 namespace gfx=rex::graphics;
@@ -15,6 +16,9 @@ void RexRenderTargets::Initialize(TransferEncoder encoder) {
     encode_=[this](Frame& f,const OwnershipTransfer& t,std::string& e){return transfers_->Encode(f,t,e);};
   }
   InitializeCommon();initialized_=true;
+  resolves_=std::make_unique<RexResolve>(next_id_);
+  BufferStorage edram{next_id_(),gfx::xenos::kEdramSizeBytes,true,{}};
+  edram.owner=std::make_shared<const Identity>(edram.id);edram_=std::move(edram);
 }
 gfx::RenderTargetCache::RenderTarget* RexRenderTargets::CreateRenderTarget(Key key) {
   Surface image;image.id=next_id_();if(!image.id)return nullptr;

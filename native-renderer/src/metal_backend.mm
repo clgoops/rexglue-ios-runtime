@@ -5,6 +5,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Foundation/Foundation.h>
+#import <TargetConditionals.h>
 #include "rex/native/metal_backend.h"
 #include "rex/native/lru.h"
 #include <algorithm>
@@ -39,6 +40,21 @@ MTLPixelFormat Pixel(Format f) {
     case Format::R32Uint:return MTLPixelFormatR32Uint;
     case Format::RG32Uint:return MTLPixelFormatRG32Uint;
     case Format::Stencil8View:return MTLPixelFormatX32_Stencil8;
+    case Format::R8Snorm:return MTLPixelFormatR8Snorm;
+    case Format::RG8Snorm:return MTLPixelFormatRG8Snorm;
+    case Format::RGBA8Snorm:return MTLPixelFormatRGBA8Snorm;
+    case Format::R16Float:return MTLPixelFormatR16Float;
+    case Format::R16Unorm:return MTLPixelFormatR16Unorm;
+    case Format::R16Snorm:return MTLPixelFormatR16Snorm;
+    case Format::RG16Unorm:return MTLPixelFormatRG16Unorm;
+    case Format::RGBA16Unorm:return MTLPixelFormatRGBA16Unorm;
+#if TARGET_OS_IPHONE
+    case Format::BGR565:return MTLPixelFormatB5G6R5Unorm;
+    case Format::BGR5A1:return MTLPixelFormatBGR5A1Unorm;
+    case Format::ABGR4:return MTLPixelFormatABGR4Unorm;
+#else
+    case Format::BGR565:case Format::BGR5A1:case Format::ABGR4:return MTLPixelFormatInvalid;
+#endif
     case Format::R32Float:return MTLPixelFormatR32Float;
     case Format::RG32Float:return MTLPixelFormatRG32Float;
     case Format::RGBA32Float:return MTLPixelFormatRGBA32Float;
@@ -92,7 +108,9 @@ MTLPrimitiveType Topology(Primitive p){
   static constexpr MTLPrimitiveType table[]={MTLPrimitiveTypePoint,MTLPrimitiveTypeLine,MTLPrimitiveTypeLineStrip,MTLPrimitiveTypeTriangle,MTLPrimitiveTypeTriangleStrip};return table[size_t(p)];
 }
 MTLSamplerAddressMode Addressing(Address a){
-  static constexpr MTLSamplerAddressMode table[]={MTLSamplerAddressModeClampToEdge,MTLSamplerAddressModeRepeat,MTLSamplerAddressModeMirrorRepeat,MTLSamplerAddressModeClampToZero};return table[size_t(a)];
+  static constexpr MTLSamplerAddressMode table[]={MTLSamplerAddressModeClampToEdge,MTLSamplerAddressModeRepeat,
+    MTLSamplerAddressModeMirrorRepeat,MTLSamplerAddressModeClampToZero,MTLSamplerAddressModeMirrorClampToEdge,
+    MTLSamplerAddressModeClampToBorderColor};return table[size_t(a)];
 }
 bool SameOwner(const std::weak_ptr<const void>& weak,const std::shared_ptr<const void>& owner){
   auto old=weak.lock();return old&&!old.owner_before(owner)&&!owner.owner_before(old);
@@ -404,6 +422,8 @@ struct MetalBackend::Impl {
         d.mipFilter=s.mip==Filter::Linear?MTLSamplerMipFilterLinear:MTLSamplerMipFilterNearest;
         d.sAddressMode=Addressing(s.u);d.tAddressMode=Addressing(s.v);d.rAddressMode=Addressing(s.w);
         d.lodMinClamp=s.min_lod;d.lodMaxClamp=s.max_lod;d.maxAnisotropy=s.anisotropy;
+        d.borderColor=s.border==Border::OpaqueWhite?MTLSamplerBorderColorOpaqueWhite:
+          s.border==Border::OpaqueBlack?MTLSamplerBorderColorOpaqueBlack:MTLSamplerBorderColorTransparentBlack;
         id<MTLSamplerState> native=[device newSamplerStateWithDescriptor:d];if(!native)return Fail(error,"Native sampler creation failed");
         object=&samplers.Insert(s.id,SamplerObject{s,native});samplers.Trim(options.maximum_samplers);object=samplers.Find(s.id);
       }
@@ -478,10 +498,12 @@ struct MetalBackend::Impl {
     std::string source="#include <metal_stdlib>\nusing namespace metal;\nstruct C {float4 color[4];float depth;};\nvertex float4 clear_vs(uint i[[vertex_id]]){float2 p=float2((i<<1)&2,i&2);return float4(p*2-1,0,1);}\n";
     if(key.mask||key.clear_depth){
       source+="struct O{";
-      for(size_t i=0;i<4;++i)if(key.mask&(1u<<i))source+="float4 c"+std::to_string(i)+" [[color("+std::to_string(i)+")]];";
+      auto integer=[](Format f){return f==Format::RG16Uint||f==Format::RGBA16Uint||f==Format::R32Uint||f==Format::RG32Uint;};
+      for(size_t i=0;i<4;++i)if(key.mask&(1u<<i))source+=std::string(integer(key.colors[i])?"uint4 c":"float4 c")+std::to_string(i)+" [[color("+std::to_string(i)+")]];";
       if(key.clear_depth)source+="float d[[depth(any)]];";
       source+="};fragment O clear_ps(constant C& c[[buffer(0)]]){O o;";
-      for(size_t i=0;i<4;++i)if(key.mask&(1u<<i))source+="o.c"+std::to_string(i)+"=c.color["+std::to_string(i)+"];";
+      for(size_t i=0;i<4;++i)if(key.mask&(1u<<i))source+="o.c"+std::to_string(i)+"="+
+        (integer(key.colors[i])?"as_type<uint4>(c.color[":"c.color[")+std::to_string(i)+(integer(key.colors[i])?"]);":"];\n");
       if(key.clear_depth)source+="o.d=c.depth;";
       source+="return o;}";
     } else source+="fragment void clear_ps(){}";
@@ -505,7 +527,12 @@ struct MetalBackend::Impl {
     if(pass.depth)key.depth=format(pass.depth->view);if(pass.stencil)key.stencil=format(pass.stencil->view);
     auto* p=ClearPipeline(key,error);if(!p)return false;lease->gpu.push_back(p->pipeline);lease->gpu.push_back(p->depth);
     struct alignas(16) Constants {std::array<std::array<float,4>,4> color;float depth;};Constants constants{};
-    for(size_t i=0;i<4;++i)for(size_t j=0;j<4;++j)constants.color[i][j]=float(c.color[i][j]);constants.depth=float(c.depth_value);
+    for(size_t i=0;i<4;++i)for(size_t j=0;j<4;++j) {
+      if(key.colors[i]==Format::RG16Uint||key.colors[i]==Format::RGBA16Uint||key.colors[i]==Format::R32Uint||key.colors[i]==Format::RG32Uint) {
+        uint32_t bits=uint32_t(std::clamp(c.color[i][j],0.0,double(UINT32_MAX)));std::memcpy(&constants.color[i][j],&bits,4);
+      } else constants.color[i][j]=float(c.color[i][j]);
+    }
+    constants.depth=float(c.depth_value);
     [e setRenderPipelineState:p->pipeline];[e setDepthStencilState:p->depth];
     [e setViewport:MTLViewport{0,0,double(pass.width),double(pass.height),0,1}];
     [e setScissorRect:MTLScissorRect{c.rectangle.x,c.rectangle.y,c.rectangle.width,c.rectangle.height}];
@@ -558,6 +585,9 @@ struct MetalBackend::Impl {
       id<MTLBuffer> source=[device newBufferWithBytes:upload->bytes->data() length:upload->bytes->size() options:MTLResourceStorageModeShared];
       if(!source)success=Fail(error,"GPU buffer upload staging failed");
       else {lease->gpu.push_back(source);[blit copyFromBuffer:source sourceOffset:0 toBuffer:BufferAt(upload->destination) destinationOffset:upload->destination.offset size:upload->bytes->size()];}
+    }else if(const auto* copy=std::get_if<BufferCopy>(&command)){
+      [blit copyFromBuffer:BufferAt(copy->source) sourceOffset:copy->source.offset toBuffer:BufferAt(copy->destination)
+          destinationOffset:copy->destination.offset size:copy->size];++counters.copies;
     }else if(const auto* copy=std::get_if<BufferToTexture>(&command)){
       auto source=BufferAt(copy->source);auto destination=Texture(copy->destination,false,error);
       if(!source||!destination)success=Fail(error,"Native GPU texture copy resources are absent");
@@ -701,6 +731,31 @@ bool MetalBackend::SaveBinaryArchive(std::string& error){
      ![impl_->archive serializeToURL:impl_->archive_url error:&failure]){error=DescribeError(failure);return false;}
   impl_->archive_dirty=false;return true;
 }
+Capabilities MetalBackend::DeviceCapabilities() const {
+  Capabilities c;c.max_buffer_length=impl_->device.maxBufferLength;
+  c.float32_filtering=impl_->device.supports32BitFloatFiltering;
+#if TARGET_OS_IPHONE
+  c.packed_16bit_textures=true;
+#endif
+  return c;
+}
+std::vector<std::byte> MetalBackend::ReadBuffer(const BufferView& view,std::string& error){@autoreleasepool {
+  if(!Ready(error))return {};
+  {std::lock_guard lock(impl_->state->mutex);if(impl_->state->pending) {Fail(error,"Buffer readback requires a drained native queue");return {};}}
+  auto i=impl_->storage.find(view.buffer);
+  if(i==impl_->storage.end() || !view.length || view.offset>i->second.size || view.length>i->second.size-view.offset || view.length>64ull*1024*1024) {
+    Fail(error,"Invalid GPU buffer readback range");return {};
+  }
+  auto staging=[impl_->device newBufferWithLength:view.length options:MTLResourceStorageModeShared];
+  auto command=[impl_->queue commandBuffer];if(!staging||!command) {Fail(error,"Buffer readback staging failed");return {};}
+  auto blit=[command blitCommandEncoder];if(!blit) {Fail(error,"Buffer readback encoder failed");return {};}
+  [blit copyFromBuffer:i->second.buffer sourceOffset:view.offset toBuffer:staging destinationOffset:0 size:view.length];[blit endEncoding];
+  dispatch_semaphore_t done=dispatch_semaphore_create(0);[command addCompletedHandler:^(id<MTLCommandBuffer>){dispatch_semaphore_signal(done);}];[command commit];
+  if(dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,30*NSEC_PER_SEC))||command.status!=MTLCommandBufferStatusCompleted) {
+    error=command.error?DescribeError(command.error):"Buffer readback did not complete";return {};
+  }
+  std::vector<std::byte> result(view.length);std::memcpy(result.data(),staging.contents,view.length);return result;
+}}
 std::vector<std::byte> MetalBackend::ReadRGBA8(const SurfaceView& view,std::string& error){@autoreleasepool {
   if(!Ready(error))return {};
   {std::lock_guard lock(impl_->state->mutex);if(impl_->state->pending){Fail(error,"Readback requires a drained native queue");return {};}}

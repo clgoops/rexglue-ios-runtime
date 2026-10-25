@@ -25,7 +25,9 @@ enum class Format:uint8_t {
   RGBA16Float,R32Float,RG32Float,RGBA32Float,Depth32Float,Depth32Stencil8,
   BC1,BC1Srgb,BC2,BC2Srgb,BC3,BC3Srgb,BC4,BC4Signed,BC5,BC5Signed,
   BC6Float,BC6SignedFloat,BC7,BC7Srgb,ASTC4x4,ASTC4x4Srgb,RG16Snorm,RGBA16Snorm,
-  RG16Uint,RGBA16Uint,R32Uint,RG32Uint,Stencil8View,Count
+  RG16Uint,RGBA16Uint,R32Uint,RG32Uint,Stencil8View,
+  R8Snorm,RG8Snorm,RGBA8Snorm,R16Float,R16Unorm,R16Snorm,RG16Unorm,RGBA16Unorm,
+  BGR565,BGR5A1,ABGR4,Count
 };
 struct FormatInfo {uint8_t block_width=1,block_height=1,bytes=0;bool color=false,depth=false,stencil=false;};
 FormatInfo Describe(Format);
@@ -126,13 +128,15 @@ struct Pipeline {
   auto operator<=>(const Pipeline&) const=default;
 };
 enum class Filter:uint8_t {Nearest,Linear,Count};
-enum class Address:uint8_t {Clamp,Repeat,Mirror,ClampZero,Count};
+enum class Address:uint8_t {Clamp,Repeat,Mirror,ClampZero,MirrorClamp,ClampBorder,Count};
+enum class Border:uint8_t {TransparentBlack,OpaqueBlack,OpaqueWhite,Count};
 struct Sampler {
   Identity id;
   Filter min=Filter::Nearest,mag=Filter::Nearest,mip=Filter::Nearest;
   Address u=Address::Clamp,v=Address::Clamp,w=Address::Clamp;
   float min_lod=0,max_lod=1000;
   uint32_t anisotropy=1;
+  Border border=Border::TransparentBlack;
   auto operator<=>(const Sampler&) const=default;
 };
 struct BufferBinding {uint32_t index=0;BufferView view;};
@@ -191,6 +195,7 @@ struct Pass {
   std::array<std::optional<Attachment>,4> colors;
   std::optional<Attachment> depth,stencil;
   std::vector<PassCommand> commands;
+  bool mergeable=true; // False when shader writes require an encoder boundary.
 };
 struct ImageCopy {
   SurfaceView source,destination;
@@ -204,6 +209,7 @@ struct TextureUpload {
   uint64_t bytes_per_row=0,bytes_per_image=0;
 };
 struct BufferUpload {BufferView destination;Bytes bytes;};
+struct BufferCopy {BufferView source,destination;uint64_t size=0;};
 // A GPU-produced linear image becomes a texture without a CPU readback.
 // Pitches include packed-mip offsets. Depth/stencil requires explicit lowering.
 struct BufferToTexture {
@@ -220,7 +226,7 @@ struct Dispatch {
 // Mutable-buffer/image hazards cross explicit encoder boundaries. They are not
 // hidden inside a merged pass. The producer splits passes when guest memexport
 // or target feedback needs a handoff.
-using Command=std::variant<TextureUpload,BufferUpload,BufferToTexture,Dispatch,Pass,ImageCopy,Resolve>;
+using Command=std::variant<TextureUpload,BufferUpload,BufferCopy,BufferToTexture,Dispatch,Pass,ImageCopy,Resolve>;
 struct Frame {
   uint64_t sequence=0;
   std::vector<Surface> surfaces;

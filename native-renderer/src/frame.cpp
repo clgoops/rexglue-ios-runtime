@@ -9,13 +9,14 @@
 namespace rex::native {
 FormatInfo Describe(Format format) {
   switch(format) {
-    case Format::R8:return {1,1,1,true};
-    case Format::RG8:return {1,1,2,true};
+    case Format::R8:case Format::R8Snorm:return {1,1,1,true};
+    case Format::RG8:case Format::RG8Snorm:case Format::R16Float:case Format::R16Unorm:case Format::R16Snorm:
+    case Format::BGR565:case Format::BGR5A1:case Format::ABGR4:return {1,1,2,true};
     case Format::RGBA8:case Format::RGBA8Srgb:case Format::BGRA8:case Format::BGRA8Srgb:
     case Format::RGB10A2:case Format::RG16Float:case Format::RG16Snorm:case Format::R32Float:
-    case Format::RG16Uint:case Format::R32Uint:return {1,1,4,true};
+    case Format::RG16Uint:case Format::R32Uint:case Format::RGBA8Snorm:case Format::RG16Unorm:return {1,1,4,true};
     case Format::RGBA16Float:case Format::RGBA16Snorm:case Format::RG32Float:
-    case Format::RGBA16Uint:case Format::RG32Uint:return {1,1,8,true};
+    case Format::RGBA16Uint:case Format::RG32Uint:case Format::RGBA16Unorm:return {1,1,8,true};
     case Format::RGBA32Float:return {1,1,16,true};
     case Format::Depth32Float:return {1,1,4,false,true};
     case Format::Depth32Stencil8:return {1,1,8,false,true,true};
@@ -215,7 +216,7 @@ struct Admission {
       if((p.depth!=Format::Invalid&&!Describe(p.depth).depth)||(p.stencil!=Format::Invalid&&!Describe(p.stencil).stencil))return Fail("Invalid pipeline attachment format");
       for(const auto& s:{p.front,p.back})if(!Enum(s.compare)||!Enum(s.fail)||!Enum(s.depth_fail)||!Enum(s.pass)||s.read_mask>255||s.write_mask>255)return Fail("Invalid stencil state");
     }
-    for(const auto& s:frame.samplers)if(!Enum(s.min)||!Enum(s.mag)||!Enum(s.mip)||!Enum(s.u)||!Enum(s.v)||!Enum(s.w)||!std::isfinite(s.min_lod)||!std::isfinite(s.max_lod)||s.min_lod<0||s.max_lod<s.min_lod||!s.anisotropy||s.anisotropy>16)return Fail("Invalid sampler state");
+    for(const auto& s:frame.samplers)if(!Enum(s.min)||!Enum(s.mag)||!Enum(s.mip)||!Enum(s.u)||!Enum(s.v)||!Enum(s.w)||!Enum(s.border)||!std::isfinite(s.min_lod)||!std::isfinite(s.max_lod)||s.min_lod<0||s.max_lod<s.min_lod||!s.anisotropy||s.anisotropy>16)return Fail("Invalid sampler state");
     for(const auto& command:frame.commands) {
       if(const auto* pass=std::get_if<Pass>(&command)){if(!PassValid(*pass))return false;continue;}
       if(const auto* d=std::get_if<Dispatch>(&command)) {
@@ -266,6 +267,13 @@ struct Admission {
         if(!BufferRange(c->source,required))return Fail("GPU texture copy exceeds its source buffer view");
         continue;
       }
+      if(const auto* c=std::get_if<BufferCopy>(&command)) {
+        if(!c->size || !buffer_storage.contains(c->destination.buffer) ||
+           !BufferRange(c->source,c->size) || !BufferRange(c->destination,c->size) ||
+           (c->source.buffer==c->destination.buffer && c->source.offset<c->destination.offset+c->size &&
+             c->destination.offset<c->source.offset+c->size))return Fail("Invalid or overlapping GPU buffer copy");
+        continue;
+      }
       SurfaceView source,destination;
       if(const auto* c=std::get_if<ImageCopy>(&command)){source=c->source;destination=c->destination;}
       else {const auto& r=std::get<Resolve>(command);source=r.source;destination=r.destination;}
@@ -298,7 +306,7 @@ bool Joinable(const std::optional<Attachment>& a,const std::optional<Attachment>
 bool Validate(const Frame& frame,std::string& error,const Limits& limits) {return Admission{frame,limits,error}.Run();}
 void AppendPass(Frame& frame,Pass next) {
   Pass* previous=frame.commands.empty()?nullptr:std::get_if<Pass>(&frame.commands.back());
-  bool join=previous&&previous->width==next.width&&previous->height==next.height&&previous->samples==next.samples&&Joinable(previous->depth,next.depth)&&Joinable(previous->stencil,next.stencil);
+  bool join=previous&&previous->mergeable&&next.mergeable&&previous->width==next.width&&previous->height==next.height&&previous->samples==next.samples&&Joinable(previous->depth,next.depth)&&Joinable(previous->stencil,next.stencil);
   if(join)for(size_t i=0;i<4;++i)join&=Joinable(previous->colors[i],next.colors[i]);
   if(!join){frame.commands.emplace_back(std::move(next));return;}
   for(size_t i=0;i<4;++i)if(previous->colors[i])previous->colors[i]->store=next.colors[i]->store;
