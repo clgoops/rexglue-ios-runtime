@@ -8,7 +8,7 @@
 
 namespace rex::native {
 namespace {
-BackendOptions Options() {BackendOptions o;o.mutable_buffer_budget=768ull<<20;return o;}
+BackendOptions Options() {BackendOptions o;o.mutable_buffer_budget=768ull<<20;o.letterbox=REXCVAR_GET(present_letterbox);return o;}
 Bytes CopyBytes(const void* data,size_t size) {
   auto bytes=std::make_shared<std::vector<std::byte>>(size);if(size)std::memcpy(bytes->data(),data,size);return bytes;
 }
@@ -19,7 +19,7 @@ Surface Target(NativeService& service,uint32_t w,uint32_t h) {
 class NativeTexture final:public ui::ImmediateTexture {
  public:
   NativeTexture(uint32_t w,uint32_t h):ImmediateTexture(w,h) {}
-  Surface image;Bytes data;Sampler sampler;
+  Surface image;Bytes data;Sampler sampler;bool uploaded=false;
 };
 constexpr const char* kUIVertex=R"(#include <metal_stdlib>
 using namespace metal;
@@ -70,9 +70,8 @@ class NativeImmediateDrawer final:public ui::ImmediateDrawer {
   void Draw(const ui::ImmediateDraw& in) override {
     if(!context_||!vertex_.id||in.count<=0)return;
     auto& frame=context_->frame;auto* texture=static_cast<NativeTexture*>(in.texture?in.texture:white_.get());if(!texture)return;
-    bool first=std::none_of(frame.surfaces.begin(),frame.surfaces.end(),[&](const Surface& s){return s.id==texture->image.id;});
     Declare(frame.surfaces,texture->image);Declare(frame.samplers,texture->sampler);
-    if(first)frame.commands.push_back(TextureUpload{{texture->image.id},texture->data,uint64_t(texture->width)*4,0});
+    if(!texture->uploaded) {frame.commands.push_back(TextureUpload{{texture->image.id},texture->data,uint64_t(texture->width)*4,0});texture->uploaded=true;}
     rex::native::Draw draw;draw.pipeline=pipeline_->id;draw.viewport={0,0,double(context_->pass.width),double(context_->pass.height),0,1};
     if(!ScissorToRenderTarget(in,draw.scissor.x,draw.scissor.y,draw.scissor.width,draw.scissor.height))return;
     draw.primitive=in.primitive_type==ui::ImmediatePrimitiveType::kLines?Primitive::Lines:Primitive::Triangles;
