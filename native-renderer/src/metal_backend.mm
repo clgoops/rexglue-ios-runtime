@@ -558,6 +558,16 @@ struct MetalBackend::Impl {
       id<MTLBuffer> source=[device newBufferWithBytes:upload->bytes->data() length:upload->bytes->size() options:MTLResourceStorageModeShared];
       if(!source)success=Fail(error,"GPU buffer upload staging failed");
       else {lease->gpu.push_back(source);[blit copyFromBuffer:source sourceOffset:0 toBuffer:BufferAt(upload->destination) destinationOffset:upload->destination.offset size:upload->bytes->size()];}
+    }else if(const auto* copy=std::get_if<BufferToTexture>(&command)){
+      auto source=BufferAt(copy->source);auto destination=Texture(copy->destination,false,error);
+      if(!source||!destination)success=Fail(error,"Native GPU texture copy resources are absent");
+      else {
+        [blit copyFromBuffer:source sourceOffset:copy->source.offset sourceBytesPerRow:copy->bytes_per_row
+            sourceBytesPerImage:copy->depth>1?copy->bytes_per_image:0 sourceSize:MTLSizeMake(copy->width,copy->height,copy->depth)
+            toTexture:destination destinationSlice:copy->destination.slice destinationLevel:copy->destination.level
+            destinationOrigin:MTLOriginMake(copy->destination_x,copy->destination_y,copy->destination.plane)];
+        ++counters.copies;
+      }
     }else if(const auto* upload=std::get_if<TextureUpload>(&command)){
       const Surface& s=surfaces.at(upload->destination.surface).source;const uint64_t width=std::max(1u,s.width>>upload->destination.level),height=std::max(1u,s.height>>upload->destination.level);
       const auto f=Describe(s.format);const uint64_t rows=(height+f.block_height-1)/f.block_height;

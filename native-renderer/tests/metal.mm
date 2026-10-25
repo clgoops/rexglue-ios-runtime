@@ -3,6 +3,7 @@
 #include "fixtures.h"
 #include "rex/native/metal_backend.h"
 #include <atomic>
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 using namespace test;
@@ -87,6 +88,24 @@ int main(){@autoreleasepool {
     Shader shader;shader.id=Id(102);shader.stage=Stage::Compute;shader.entry="compute_main";shader.arguments={{ArgumentKind::Buffer,0,1,16,16,TextureKind::TwoD,false,true}};shader.msl="#include <metal_stdlib>\nusing namespace metal;kernel void compute_main(device float4* data[[buffer(0)]]){data[0]=float4(0,1,0,1);}";f.shaders.push_back(shader);
     Dispatch d;d.shader=shader.id;d.bindings.buffers={{0,{Id(500),0,16}}};auto& draw=std::get<Draw>(std::get<Pass>(f.commands[0]).commands[0]);draw.bindings[1].buffers={{0,{Id(500),0,16}}};f.commands.insert(f.commands.begin(),d);f.commands.insert(f.commands.begin(),upload);
     Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{0,255,0,255});Done("mutable guest-buffer upload, compute write and fragment read ordering");
+  }
+  {
+    MetalBackend backend;Frame f;f.sequence=1;auto image=Target(1);image.renderable=false;f.surfaces={image};
+    f.buffer_storage={{Id(500),2048,true,std::make_shared<const int>(1)}};
+    Shader shader;shader.id=Id(100);shader.stage=Stage::Compute;shader.entry="compute_main";
+    shader.arguments={{ArgumentKind::Buffer,0,1,2048,4,TextureKind::TwoD,false,true}};
+    shader.msl="#include <metal_stdlib>\nusing namespace metal;kernel void compute_main(device uint* data[[buffer(0)]],uint2 p[[thread_position_in_grid]]){if(p.x<16&&p.y<16)data[4+p.y*20+p.x]=0xff00ff00u;}";
+    f.shaders={shader};Dispatch dispatch;dispatch.shader=shader.id;dispatch.groups={2,2,1};dispatch.threads={8,8,1};
+    dispatch.bindings.buffers={{0,{Id(500),0,2048}}};f.commands.push_back(dispatch);
+    f.commands.push_back(BufferToTexture{{Id(500),16,1280},View(1),80,0,0,0,16,16});
+    Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{0,255,0,255});Done("GPU conversion buffer becomes a texture with explicit row pitch and offset");
+  }
+  {
+    MetalBackend backend;Frame f;f.sequence=1;auto image=Target(1);image.renderable=false;image.kind=TextureKind::ThreeD;image.depth=2;f.surfaces={image};
+    std::array<uint32_t,512> data;std::fill_n(data.begin(),256,0xff0000ffu);std::fill_n(data.begin()+256,256,0xffff0000u);
+    f.buffers={{Id(500),Data(data),false}};auto view=View(1);
+    f.commands.push_back(BufferToTexture{{Id(500),0,2048},view,64,1024,0,0,16,16,2});
+    Submit(backend,std::move(f));Pixel(backend,view,8,8,{255,0,0,255});view.plane=1;Pixel(backend,view,8,8,{0,0,255,255});Done("GPU buffer copy preserves 3D image strides");
   }
   {
     BackendOptions options;options.maximum_frames=1;options.constant_budget=256;MetalBackend backend(options);auto f=Triangle();Surface target=f.surfaces[0];Submit(backend,f);Pixel(backend,View(1),8,8,{255,0,0,255});

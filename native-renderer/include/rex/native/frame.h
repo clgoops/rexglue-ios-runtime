@@ -204,6 +204,14 @@ struct TextureUpload {
   uint64_t bytes_per_row=0,bytes_per_image=0;
 };
 struct BufferUpload {BufferView destination;Bytes bytes;};
+// A GPU-produced linear image becomes a texture without a CPU readback.
+// Pitches include packed-mip offsets. Depth/stencil requires explicit lowering.
+struct BufferToTexture {
+  BufferView source;
+  SurfaceView destination;
+  uint64_t bytes_per_row=0,bytes_per_image=0;
+  uint32_t destination_x=0,destination_y=0,width=0,height=0,depth=1;
+};
 struct Dispatch {
   Identity shader;
   Bindings bindings;
@@ -212,7 +220,7 @@ struct Dispatch {
 // Mutable-buffer/image hazards cross explicit encoder boundaries. They are not
 // hidden inside a merged pass. The producer splits passes when guest memexport
 // or target feedback needs a handoff.
-using Command=std::variant<TextureUpload,BufferUpload,Dispatch,Pass,ImageCopy,Resolve>;
+using Command=std::variant<TextureUpload,BufferUpload,BufferToTexture,Dispatch,Pass,ImageCopy,Resolve>;
 struct Frame {
   uint64_t sequence=0;
   std::vector<Surface> surfaces;

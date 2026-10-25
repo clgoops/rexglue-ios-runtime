@@ -240,6 +240,32 @@ struct Admission {
            u->bytes_per_image<u->bytes_per_row*rows||u->bytes_per_image>u->bytes->size()||u->bytes->size()>limits.max_upload_bytes-upload_bytes)return Fail("Texture upload pitch or payload is invalid");
         upload_bytes+=u->bytes->size();continue;
       }
+      if(const auto* c=std::get_if<BufferToTexture>(&command)) {
+        const Surface* s=View(c->destination);
+        if(!s || s->samples!=1 || !c->width || !c->height || !c->depth)return Fail("Invalid GPU texture copy destination");
+        const auto format=Describe(ViewFormat(c->destination));
+        if(!format.color)return Fail("GPU texture copy needs an explicit depth/stencil aspect conversion");
+        const uint32_t w=std::max(1u,s->width>>c->destination.level),h=std::max(1u,s->height>>c->destination.level);
+        const uint32_t d=s->kind==TextureKind::ThreeD?std::max(1u,s->depth>>c->destination.level):1;
+        if(!RectInside({c->destination_x,c->destination_y,c->width,c->height},w,h) ||
+           c->depth>d-c->destination.plane || c->destination_x%format.block_width || c->destination_y%format.block_height ||
+           (c->width%format.block_width && c->destination_x+c->width!=w) ||
+           (c->height%format.block_height && c->destination_y+c->height!=h))return Fail("GPU texture copy exceeds destination bounds or blocks");
+        const uint64_t row=((uint64_t(c->width)+format.block_width-1)/format.block_width)*format.bytes;
+        const uint64_t rows=(uint64_t(c->height)+format.block_height-1)/format.block_height;
+        if(c->source.offset%format.bytes || c->bytes_per_row<row || c->bytes_per_row%format.bytes ||
+           c->bytes_per_row>uint64_t(limits.max_dimension)*format.bytes ||
+           c->bytes_per_row>limits.max_buffer_bytes/rows)return Fail("GPU texture copy pitch or alignment is invalid");
+        const uint64_t one=c->bytes_per_row*(rows-1)+row;
+        uint64_t required=one;
+        if(c->depth>1) {
+          if(c->bytes_per_image<c->bytes_per_row*rows || c->bytes_per_image%format.bytes ||
+             c->bytes_per_image>(limits.max_buffer_bytes-one)/(c->depth-1))return Fail("GPU volume texture stride exceeds its buffer");
+          required+=c->bytes_per_image*(c->depth-1);
+        }
+        if(!BufferRange(c->source,required))return Fail("GPU texture copy exceeds its source buffer view");
+        continue;
+      }
       SurfaceView source,destination;
       if(const auto* c=std::get_if<ImageCopy>(&command)){source=c->source;destination=c->destination;}
       else {const auto& r=std::get<Resolve>(command);source=r.source;destination=r.destination;}

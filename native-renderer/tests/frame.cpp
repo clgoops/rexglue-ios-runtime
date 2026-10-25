@@ -56,6 +56,18 @@ int main(){
   uploads.commands.clear();auto owner=std::make_shared<const int>(1);uploads.buffer_storage.push_back({Id(10),64,true,owner});
   uploads.commands.push_back(BufferUpload{{Id(10),0,64},Data(std::array<uint32_t,16>{})});require(Validate(uploads,error));
   std::get<BufferUpload>(uploads.commands[0]).destination.offset=1;require(!Validate(uploads,error));
+  Frame gpu_copy;gpu_copy.sequence=1;gpu_copy.surfaces={Target(1)};
+  gpu_copy.buffer_storage={{Id(500),1024,true,owner}};
+  BufferToTexture transfer{{Id(500),0,1024},View(1),64,0,0,0,16,16};
+  gpu_copy.commands.push_back(transfer);require(Validate(gpu_copy,error));
+  auto invalid_copy=[&](auto change) {auto f=gpu_copy;change(std::get<BufferToTexture>(f.commands[0]));require(!Validate(f,error));};
+  invalid_copy([](auto& c){c.source.length=1023;});invalid_copy([](auto& c){c.source.offset=1;});
+  invalid_copy([](auto& c){c.width=17;});invalid_copy([](auto& c){c.depth=2;});
+  invalid_copy([](auto& c){c.bytes_per_row=UINT64_MAX;});
+  gpu_copy.surfaces[0].kind=TextureKind::ThreeD;gpu_copy.surfaces[0].depth=2;
+  gpu_copy.buffer_storage[0].size=2048;
+  auto& volume=std::get<BufferToTexture>(gpu_copy.commands[0]);volume.depth=2;volume.bytes_per_image=1024;volume.source.length=2048;
+  require(Validate(gpu_copy,error));volume.bytes_per_image=UINT64_MAX;require(!Validate(gpu_copy,error));
   auto compute=good;compute.commands.clear();Shader cs;cs.id=Id(400);cs.stage=Stage::Compute;cs.entry="compute_main";cs.msl="kernel void compute_main(){}";
   cs.arguments={{ArgumentKind::Buffer,0,1,16,16,TextureKind::TwoD,false,true}};compute.shaders.push_back(cs);
   Dispatch d;d.shader=cs.id;d.bindings.buffers.push_back({0,{Id(300),0,16}});compute.commands.emplace_back(d);require(!Validate(compute,error));
