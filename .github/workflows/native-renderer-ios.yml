@@ -35,7 +35,7 @@ jobs:
           if ! xcrun --find metal; then xcodebuild -downloadComponent MetalToolchain; fi
           python3 native-renderer/tools/check-sdk-shaders.py --sdk sdk --exporter native-host/native-shader-export --output sdk-native-msl --apple-sdk iphoneos | tee native-sdk-shader-tests.log
           for source in actual-translator-msl/*.metal; do
-            xcrun --sdk iphoneos metal -std=metal2.3 -fno-fast-math -mios-version-min=18.0 -c "$source" -o "${source%.metal}.air"
+            xcrun --sdk iphoneos metal -std=ios-metal2.3 -fno-fast-math -mios-version-min=18.0 -c "$source" -o "${source%.metal}.air"
           done
       - name: Run native Metal pixel cases when the runner exposes a GPU
         run: |

@@ -17,6 +17,12 @@ Implemented:
 - ReXGlue constant-bank preparation using the actual SDK system struct and
   sparse constant maps. Unchanged banks reuse immutable buffers; pending frames
   retain old data when later draws change the constants.
+- A shared-memory adapter retains the SDK's physical-page watches and emits
+  immutable dirty-page snapshots as ordered buffer uploads. It supports the
+  translator's one/two/four buffer layout, splits uploads at native chunk
+  boundaries and faults rejected frame scopes rather than continuing with
+  incorrect coherence metadata. This adapter has compile validation only so far;
+  guest concurrency and full-game integration remain unverified.
 
 First backend validation (`c9564f9`, workflow run `40189292454`) passed 57 CPU
 contracts, their ASan/UBSan run, and 16 actual Metal GPU cases with 134 checks.

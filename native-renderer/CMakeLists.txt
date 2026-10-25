@@ -21,7 +21,7 @@ endif()
 option(REX_NATIVE_BUILD_TESTS "Build native renderer contract tests" ON)
 set(REX_NATIVE_REXSDK_DIR "" CACHE PATH "Pinned ReXGlue SDK for frontend adapters and real shader tests")
 if(REX_NATIVE_REXSDK_DIR AND TARGET rex-native-spirv)
-  add_library(rex-native-rex-adapters STATIC src/rex_constants.cpp)
+  add_library(rex-native-rex-adapters STATIC src/rex_constants.cpp src/rex_shared_memory.cpp)
   target_include_directories(rex-native-rex-adapters PUBLIC include
     "${REX_NATIVE_REXSDK_DIR}/include" "${REX_NATIVE_REXSDK_DIR}/thirdparty/fmt/include"
     "${REX_NATIVE_REXSDK_DIR}/thirdparty/glslang"

@@ -33,7 +33,8 @@ for header in sorted((a.sdk / 'src/graphics/shaders/vulkan_spirv').glob('*.h')):
         raise RuntimeError(f'Exporter failure: {item}')
     if run.returncode == 0 and a.apple_sdk:
         air = a.output / (name + '.air')
-        command = ['xcrun', '--sdk', a.apple_sdk, 'metal', '-std=metal2.3', '-fno-fast-math', '-c', str(msl), '-o', str(air)]
+        standard = 'ios-metal2.3' if a.apple_sdk == 'iphoneos' else 'macos-metal2.3'
+        command = ['xcrun', '--sdk', a.apple_sdk, 'metal', '-std=' + standard, '-fno-fast-math', '-c', str(msl), '-o', str(air)]
         if a.apple_sdk == 'iphoneos':
             command.insert(4, '-mios-version-min=18.0')
         compile_result = subprocess.run(command, capture_output=True, text=True)
