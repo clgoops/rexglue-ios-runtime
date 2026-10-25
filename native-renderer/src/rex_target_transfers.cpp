@@ -65,6 +65,20 @@ bool RexTargetTransfers::Encode(Frame& frame,const RexRenderTargets::OwnershipTr
      bool(t.host_depth_source)!=bool(t.host_depth_image)) {
     error="invalid native EDRAM ownership transfer";return false;
   }
+  auto matches=[&](RexRenderTargets::Key k,const Surface& s) {
+    return k.pitch_tiles_at_32bpp && uint32_t(k.msaa_samples)<=2 && s.width==k.GetWidth()*scale_x_ &&
+      s.samples==(1u<<uint32_t(k.msaa_samples)) && s.format==(k.is_depth?
+      Format::Depth32Stencil8:RexRenderTargets::NativeColorFormat(k.GetColorFormat()));
+  };
+  if(!matches(t.source,t.source_image) || !matches(t.destination,t.destination_image) ||
+     (t.host_depth_source && !matches(*t.host_depth_source,*t.host_depth_image))) {
+    error="native ownership surface does not match its SDK key";return false;
+  }
+  for(const Rect& rect:t.rectangles)if(!rect.width || !rect.height || rect.x>t.destination_image.width ||
+    rect.width>t.destination_image.width-rect.x || rect.y>t.destination_image.height ||
+    rect.height>t.destination_image.height-rect.y) {
+    error="SDK ownership rectangle exceeds its native destination";return false;
+  }
   RexTransferShader::Request r;r.source=t.source;r.destination=t.destination;
   r.scale_x=scale_x_;r.scale_y=scale_y_;r.host_depth=t.host_depth_source;
   using M=RexTransferShader::Mode;
@@ -121,10 +135,6 @@ bool RexTargetTransfers::Encode(Frame& frame,const RexRenderTargets::OwnershipTr
   if(!BindConverted(entry->fragment,resources,next_(),bindings,auxiliary,error))return false;
   if(auxiliary)frame.buffers.push_back(*auxiliary);
   for(const Rect& rect:t.rectangles) {
-    if(!rect.width || !rect.height || rect.x>pass.width || rect.width>pass.width-rect.x ||
-       rect.y>pass.height || rect.height>pass.height-rect.y) {
-      error="SDK ownership rectangle exceeds its native destination";return false;
-    }
     auto draw=Fullscreen(entry->pipeline.id,pass.width,pass.height);draw.scissor=rect;draw.bindings[1]=bindings;
     pass.commands.push_back(std::move(draw));
   }

@@ -90,6 +90,7 @@ struct Admission {
   }
   bool AttachmentValid(const Attachment& a,const Pass& pass,int aspect) {
     const Surface* s=View(a.view);if(!s || !s->renderable || !Enum(a.load)||!Enum(a.store))return false;
+    if(ViewFormat(a.view)==Format::Stencil8View)return false;
     const auto format=Describe(ViewFormat(a.view));
     if((aspect==0&&!format.color)||(aspect==1&&!format.depth)||(aspect==2&&!format.stencil))return false;
     if(pass.width>std::max(1u,s->width>>a.view.level)||pass.height>std::max(1u,s->height>>a.view.level)||pass.samples!=s->samples)return false;

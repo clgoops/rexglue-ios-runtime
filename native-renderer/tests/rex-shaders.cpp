@@ -15,6 +15,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <source_location>
 namespace rex::filesystem {
 FILE* OpenFile(const std::filesystem::path& path,std::string_view mode) {return fopen(path.string().c_str(),std::string(mode).c_str());}
 }
@@ -34,7 +35,8 @@ const int8_t kD3D10StandardSamplePositions4x[4][2]={{-2,-6},{6,-2},{-6,2},{2,6}}
 int main(int argc,char** argv) {
   using namespace rex;using namespace rex::graphics;using namespace rex::native;
   unsigned checks=0,modules=0;std::string error;uint64_t object=100;
-  auto check=[&](bool value) {++checks;if(!value) {std::cerr<<"ReX shader check "<<checks<<" failed: "<<error<<'\n';std::abort();}};
+  auto check=[&](bool value,std::source_location where=std::source_location::current()) {++checks;if(!value) {
+    std::cerr<<"ReX shader check "<<checks<<" failed at "<<where.file_name()<<':'<<where.line()<<": "<<error<<'\n';std::abort();}};
   auto next=[&] {return Identity{object++,1};};
   RexConstantState state;RegisterFile registers;
   for(size_t i=0;i<RegisterFile::kRegisterCount;++i)registers.values[i]=uint32_t(i);
@@ -216,7 +218,8 @@ int main(int argc,char** argv) {
       packet.surfaces={source,destination};
       Pass clear;clear.width=80;clear.height=16;clear.samples=samples;
       Attachment a;a.view={source.id};a.load=Load::Clear;a.color={1,2,0,1};clear.colors[0]=a;packet.commands.push_back(clear);
-      RexRenderTargets::OwnershipTransfer t{};t.source.pitch_tiles_at_32bpp=t.destination.pitch_tiles_at_32bpp=1;
+      RexRenderTargets::OwnershipTransfer t{};
+      t.source.pitch_tiles_at_32bpp=t.destination.pitch_tiles_at_32bpp=samples==4?2:1;
       t.source.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_16_16_FLOAT);
       t.destination.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8);
       t.source.msaa_samples=t.destination.msaa_samples=xenos::MsaaSamples(std::countr_zero(samples));
@@ -228,7 +231,12 @@ int main(int argc,char** argv) {
       auto retained=std::make_shared<const Frame>(std::move(packet));check(backend.Submit(retained,{},error));
       check(backend.Drain(std::chrono::seconds(30),error));auto pixels=backend.ReadRGBA8(output,error);
       check(pixels.size()==80*16*4);const int expected[]={0,60,0,64};
-      for(unsigned c=0;c<4;++c)check(std::to_integer<uint8_t>(pixels[(8*80+40)*4+c])==expected[c]);
+      for(unsigned c=0;c<4;++c) {
+        const unsigned actual=std::to_integer<uint8_t>(pixels[(8*80+40)*4+c]);
+        if(actual!=unsigned(expected[c]))error="MSAA "+std::to_string(samples)+" channel "+std::to_string(c)+
+          " expected "+std::to_string(expected[c])+" got "+std::to_string(actual);
+        check(actual==unsigned(expected[c]));
+      }
     }
     // Host depth is the destination: preserve its full float32 value through
     // a separate native snapshot before the ownership pass attaches it.
