@@ -1,36 +1,49 @@
 {
-  "implementation_commit": "264bc358b493c259d561bc7ec0ff1825328741bb",
-  "workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40215220850",
-  "target": "iOS ARM64; deployment target 18.0",
-  "cpu_frame_checks": 72,
-  "cpu_shader_binding_checks": 32,
+  "implementation_commit": "78cc2c30f3e5d44ac371cd37998363439490c535",
+  "renderer_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40234982408",
+  "cpu_frame_checks": 75,
+  "cpu_binding_checks": 32,
+  "cpu_rex_frontend_checks": 4185,
   "actual_translator_modules": 27,
-  "ios_metal_host_modules_compiled": 96,
-  "unsupported_host_modules": [
-    "passthrough_position_xy_vs: vertex attribute adapter required"
-  ],
-  "gpu_available": true,
-  "baseline_gpu_cases": 16,
-  "baseline_gpu_checks": 134,
-  "sdk_gamma_and_compute_clear_pixel_checks": 21,
-  "actual_microcode_to_metal_draw_pixels": "passed: two frames with distinct constant snapshots",
-  "frame_asan_ubsan": "passed",
-  "native_metal_dylib_sha256": "c8c67d4c00ed20fc51f2887e2aec546ec6b37e85735d609dcb860a6749bdfadd",
-  "live_blur_integration": false,
-  "blur_performance_improvement_measured": false,
-  "installable_ipa_produced_by_this_stage": false,
-  "cpu_rex_frontend_checks": 4019,
   "edram_transfer_shader_variants_converted": 1836,
-  "native_target_gpu_cases": {
-    "half_bits_integer_views": [
-      "1x MSAA",
-      "2x MSAA",
-      "4x MSAA"
-    ],
-    "depth_stencil_round_trip": "single-sample with retained host-depth snapshot"
-  },
+  "ios_metal_host_modules_compiled": 96,
+  "production_swap_ui_shaders_compiled": 4,
+  "native_gpu_cases": 19,
+  "native_gpu_checks": 415,
+  "frame_asan_ubsan": "passed",
+  "gpu_target_edram_texture_round_trip": "passed",
+  "gpu_attachmentless_fragment_memexport": "passed",
   "native_target_bridge_compiled_for_ios_arm64": true,
-  "native_gpu_cases": 18,
-  "native_gpu_checks": 153,
-  "gpu_conversion_buffer_to_texture": "passed: GPU compute writes, nontrivial row pitch/offset, and 3D image strides"
+  "native_metal_backend_dylib_sha256": "125b20d8c0f135957d5db3af4a2369547ef1ab1eb221670da094bc2ae3e82bc0",
+  "live_frontend_implemented": true,
+  "game_runtime_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40234978875",
+  "device_execution_verified": false,
+  "blur_performance_improvement_measured": false,
+  "installable_ipa_produced_by_this_stage": true,
+  "limitations": [
+    "Original guest resolution",
+    "Tessellation requires explicit lowering",
+    "GPU pixel cases are synthetic, not captured Blur frames"
+  ],
+  "game_runtime_build_status": "success",
+  "native_gpu_plugin_built_for_ios_arm64": true,
+  "game_factory_selects_native_metal": true,
+  "vulkan_fallback": false,
+  "runtime_libraries": [
+    {
+      "name": "librexruntime.dylib",
+      "sha256": "d2eafefebfff697d070bd003054366c829ae291c1eefb52d7f92b5ddfdcd9055",
+      "bytes": 9159328
+    },
+    {
+      "name": "librexgpu-xenos.dylib",
+      "sha256": "482882b9a19669f006a72ab64cdc0dd464b5d49d7c9b1b6f7884ff06649de86f",
+      "bytes": 14333056
+    },
+    {
+      "name": "libMoltenVK.dylib",
+      "sha256": "842031bf4bc2926f75c633559df7047f5848c6bc726ea7b8224fedb10c933773",
+      "bytes": 4511560
+    }
+  ]
 }

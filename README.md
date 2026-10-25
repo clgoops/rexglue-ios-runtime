@@ -1,5 +1,24 @@
 # ReXGlue iOS runtime build
 
+## Native Metal game runtime
+
+The native GPU plugin and runtime built successfully for iOS ARM64 in
+[run 40234978875](https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40234978875),
+from source `78cc2c30f3e5d44ac371cd37998363439490c535`. Its factory selects the
+native graphics system, command processor, guest texture/resolve adapters and
+Metal presentation/UI path. It does not fall back to Vulkan. Legacy SDK modules
+remain linked to preserve the existing AOT app's dynamic ABI.
+
+[Renderer run 40234982408](https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40234982408)
+passed CPU contracts/sanitizers, actual translator fixtures, production display/UI
+shader compilation, 19 native GPU cases with 415 checks, target/EDRAM/texture pixel
+round trips and the iOS ARM64 build. These fixtures do not establish full-game
+fidelity or performance on an iPhone. See `native-renderer/VALIDATION.json`.
+Private packaging and device signing are separate; no game app or assets are
+published here.
+
+## Existing Vulkan diagnostics and runtime package
+
 Intended repository: **clgoops/rexglue-ios-runtime**. This source package supports
 public review and reproducible builds of the open-source runtime components.
 
