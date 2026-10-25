@@ -68,6 +68,13 @@ int main(){
   joined.commands.clear();AppendPass(joined,first);next.colors[0]->view.level=1;AppendPass(joined,next);require(joined.commands.size()==2);
   joined.commands.clear();first.colors[0]->store=Store::Discard;AppendPass(joined,first);next.colors[0]->view.level=0;AppendPass(joined,next);require(joined.commands.size()==2);
   require(CompatibleView(Format::RGBA8,Format::RGBA8Srgb));require(!CompatibleView(Format::RGBA8,Format::BGRA8));
+  require(CompatibleView(Format::RG16Float,Format::RG16Uint));
+  require(CompatibleView(Format::RGBA16Snorm,Format::RGBA16Uint));
+  require(CompatibleView(Format::R32Float,Format::R32Uint));
+  require(!CompatibleView(Format::RG16Float,Format::R32Uint));
+  require(CompatibleView(Format::Depth32Stencil8,Format::Stencil8View));
+  require(!CompatibleView(Format::Stencil8View,Format::Depth32Stencil8));
+  reject([](Frame& f){f.surfaces[0].format=Format::Stencil8View;});
   Lru<Identity,int> cache;cache.Insert(Id(1),1);cache.Insert(Id(2),2);cache.Insert(Id(3),3);require(*cache.Find(Id(1))==1);cache.Trim(2);require(!cache.Contains(Id(2))&&cache.Contains(Id(1))&&cache.Contains(Id(3)));
   cache.Insert({1,2},4);cache.Trim(2);require(cache.Contains(Id(1))&&cache.Contains({1,2})&&!cache.Contains(Id(3)));
   std::cout<<checks<<" native frame contracts passed\n";

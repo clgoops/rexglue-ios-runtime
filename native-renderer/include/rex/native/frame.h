@@ -24,7 +24,8 @@ enum class Format:uint8_t {
   Invalid,R8,RG8,RGBA8,RGBA8Srgb,BGRA8,BGRA8Srgb,RGB10A2,RG16Float,
   RGBA16Float,R32Float,RG32Float,RGBA32Float,Depth32Float,Depth32Stencil8,
   BC1,BC1Srgb,BC2,BC2Srgb,BC3,BC3Srgb,BC4,BC4Signed,BC5,BC5Signed,
-  BC6Float,BC6SignedFloat,BC7,BC7Srgb,ASTC4x4,ASTC4x4Srgb,Count
+  BC6Float,BC6SignedFloat,BC7,BC7Srgb,ASTC4x4,ASTC4x4Srgb,RG16Snorm,RGBA16Snorm,
+  RG16Uint,RGBA16Uint,R32Uint,RG32Uint,Stencil8View,Count
 };
 struct FormatInfo {uint8_t block_width=1,block_height=1,bytes=0;bool color=false,depth=false,stencil=false;};
 FormatInfo Describe(Format);

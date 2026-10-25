@@ -32,6 +32,13 @@ MTLPixelFormat Pixel(Format f) {
     case Format::RGB10A2:return MTLPixelFormatRGB10A2Unorm;
     case Format::RG16Float:return MTLPixelFormatRG16Float;
     case Format::RGBA16Float:return MTLPixelFormatRGBA16Float;
+    case Format::RG16Snorm:return MTLPixelFormatRG16Snorm;
+    case Format::RGBA16Snorm:return MTLPixelFormatRGBA16Snorm;
+    case Format::RG16Uint:return MTLPixelFormatRG16Uint;
+    case Format::RGBA16Uint:return MTLPixelFormatRGBA16Uint;
+    case Format::R32Uint:return MTLPixelFormatR32Uint;
+    case Format::RG32Uint:return MTLPixelFormatRG32Uint;
+    case Format::Stencil8View:return MTLPixelFormatX32_Stencil8;
     case Format::R32Float:return MTLPixelFormatR32Float;
     case Format::RG32Float:return MTLPixelFormatRG32Float;
     case Format::RGBA32Float:return MTLPixelFormatRGBA32Float;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rex/native/rex_constants.h"
 #include "rex/native/rex_shader.h"
+#include "rex/native/rex_transfer_shader.h"
+#include "rex/native/rex_target_transfers.h"
 #if REX_NATIVE_TEST_METAL
 #include "rex/native/metal_backend.h"
 #include "fixtures.h"
@@ -39,6 +41,74 @@ int main(int argc,char** argv) {
   RexConstantState::System system{};
   std::optional<ConvertedShader> gpu_pixel;RexConstantState::Map gpu_map{};
   if(argc>1)std::filesystem::create_directories(argv[1]);
+  // Every legal color storage pair and sample-count pair must lower without
+  // falling back to Vulkan. Selected cases are also compiled by Apple's MSL
+  // compiler in CI; the local test does not imply a title frame was rendered.
+  {
+    using F=xenos::ColorRenderTargetFormat;using M=RexTransferShader::Mode;
+    const F formats[]={F::k_8_8_8_8,F::k_8_8_8_8_GAMMA,F::k_2_10_10_10,
+      F::k_2_10_10_10_AS_10_10_10_10,F::k_2_10_10_10_FLOAT,
+      F::k_2_10_10_10_FLOAT_AS_16_16_16_16,F::k_16_16,F::k_16_16_16_16,
+      F::k_16_16_FLOAT,F::k_16_16_16_16_FLOAT,F::k_32_FLOAT,F::k_32_32_FLOAT};
+    unsigned number=0;
+    auto generate=[&](RexTransferShader::Request r,bool export_case) {
+      ConvertedShader converted;check(RexTransferShader::Generate(r,next(),converted,error));
+      check(converted.shader.stage==Stage::Fragment && !converted.shader.msl.empty());
+      if(argc>1 && export_case)std::ofstream(std::filesystem::path(argv[1])/
+        ("transfer-"+std::to_string(number)+".metal"))<<converted.shader.msl;
+      ++number;
+    };
+    for(F source:formats)for(F dest:formats)for(unsigned ss=0;ss<3;++ss)for(unsigned ds=0;ds<3;++ds) {
+      RexTransferShader::Request r;r.source.resource_format=uint32_t(source);r.destination.resource_format=uint32_t(dest);
+      r.source.msaa_samples=xenos::MsaaSamples(ss);r.destination.msaa_samples=xenos::MsaaSamples(ds);
+      generate(r,(ss==0&&ds==0)||(source==F::k_16_16&&dest==F::k_16_16_FLOAT));
+    }
+    for(bool to_depth:{false,true})for(unsigned sf=0;sf<(to_depth?12u:2u);++sf)
+      for(unsigned df=0;df<(to_depth?2u:12u);++df)for(unsigned ss=0;ss<3;++ss)for(unsigned ds=0;ds<3;++ds) {
+        RexTransferShader::Request r;r.mode=to_depth?M::ColorToDepth:M::DepthToColor;
+        r.source.is_depth=!to_depth;r.destination.is_depth=to_depth;
+        r.source.resource_format=to_depth?uint32_t(formats[sf]):sf;
+        r.destination.resource_format=to_depth?df:uint32_t(formats[df]);
+        r.source.msaa_samples=xenos::MsaaSamples(ss);r.destination.msaa_samples=xenos::MsaaSamples(ds);
+        generate(r,ss==ds && (to_depth?sf<2:df<2));
+      }
+    for(unsigned sf=0;sf<2;++sf)for(unsigned df=0;df<2;++df)
+      for(unsigned ss=0;ss<3;++ss)for(unsigned ds=0;ds<3;++ds) {
+        RexTransferShader::Request r;r.mode=M::DepthToDepth;r.source.is_depth=r.destination.is_depth=1;
+        r.source.resource_format=sf;r.destination.resource_format=df;
+        r.source.msaa_samples=xenos::MsaaSamples(ss);r.destination.msaa_samples=xenos::MsaaSamples(ds);
+        generate(r,true);
+        r.mode=M::DepthAndHostDepthToDepth;r.host_depth=r.destination;generate(r,ss==ds);
+        r.mode=M::ColorAndHostDepthToDepth;r.source.is_depth=0;r.source.resource_format=uint32_t(F::k_8_8_8_8);
+        generate(r,ss==ds);
+      }
+    RexTransferShader::Request invalid;invalid.destination.is_depth=1;ConvertedShader converted;
+    check(!RexTransferShader::Generate(invalid,next(),converted,error));
+    std::cout<<number<<" native EDRAM transfer shader variants converted\n";
+    RexTargetTransfers transfers(next);
+    Frame packet;packet.sequence=1;
+    RexRenderTargets::OwnershipTransfer transfer{};
+    transfer.source.pitch_tiles_at_32bpp=transfer.destination.pitch_tiles_at_32bpp=1;
+    transfer.source.resource_format=uint32_t(F::k_16_16_FLOAT);
+    transfer.destination.resource_format=uint32_t(F::k_8_8_8_8);
+    auto target=[&](Format f) {Surface s;s.id=next();s.format=f;s.width=80;s.height=16;
+      s.renderable=true;s.owner=std::make_shared<const Identity>(s.id);return s;};
+    transfer.source_image=target(Format::RG16Float);transfer.destination_image=target(Format::RGBA8);
+    transfer.first_tile=0;transfer.end_tile=1;transfer.rectangles={{0,0,80,16}};
+    check(transfers.Encode(packet,transfer,error));check(Validate(packet,error));
+    const auto shader_count=packet.shaders.size(),pipeline_count=packet.pipelines.size();
+    transfer.source.base_tiles=1;transfer.destination.base_tiles=2;
+    check(transfers.Encode(packet,transfer,error));check(Validate(packet,error));
+    check(packet.shaders.size()==shader_count && packet.pipelines.size()==pipeline_count);
+    transfer.destination.is_depth=1;transfer.destination.resource_format=0;
+    transfer.destination_image=target(Format::Depth32Stencil8);
+    transfer.host_depth_source=transfer.destination;transfer.host_depth_image=transfer.destination_image;
+    check(transfers.Encode(packet,transfer,error));check(Validate(packet,error));
+    // The snapshot pass must precede the depth transfer; the destination
+    // cannot be sampled while it is attached, including through stencil views.
+    check(packet.surfaces.size()==4);
+    transfer.rectangles={{79,0,2,16}};check(!transfers.Encode(packet,transfer,error));
+  }
   for(uint32_t version:{spv::Spv_1_0,spv::Spv_1_3,spv::Spv_1_5}) {
     for(int variant=0;variant<3;++variant)for(int stage=0;stage<3;++stage) {
       SpirvShaderTranslator::Features features(false);features.spirv_version=version;
@@ -135,6 +205,59 @@ int main(int argc,char** argv) {
       for(unsigned channel=0;channel<4;++channel)check(std::abs(int(std::to_integer<uint8_t>(pixels[(8*16+8)*4+channel]))-(frame==1?32:96))<=2);
     }
     std::cout<<"Actual ReX microcode -> SPIR-V -> MSL -> native draw pixels passed for two in-flight constant snapshots\n";
+    // Bit reinterpretation tests use actual SDK ownership shaders on hardware.
+    // The expected bytes come from IEEE half(1)=0x3c00 and half(2)=0x4000.
+    RexTargetTransfers transfers(next);
+    for(unsigned samples:{1u,2u,4u}) {
+      Frame packet;packet.sequence=10+samples;
+      auto target=[&](Format f,unsigned sample_count) {Surface s;s.id=next();s.format=f;s.width=80;s.height=16;
+        s.samples=sample_count;s.renderable=true;s.owner=std::make_shared<const Identity>(s.id);return s;};
+      auto source=target(Format::RG16Float,samples),destination=target(Format::RGBA8,samples);
+      packet.surfaces={source,destination};
+      Pass clear;clear.width=80;clear.height=16;clear.samples=samples;
+      Attachment a;a.view={source.id};a.load=Load::Clear;a.color={1,2,0,1};clear.colors[0]=a;packet.commands.push_back(clear);
+      RexRenderTargets::OwnershipTransfer t{};t.source.pitch_tiles_at_32bpp=t.destination.pitch_tiles_at_32bpp=1;
+      t.source.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_16_16_FLOAT);
+      t.destination.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8);
+      t.source.msaa_samples=t.destination.msaa_samples=xenos::MsaaSamples(std::countr_zero(samples));
+      t.source_image=source;t.destination_image=destination;t.first_tile=0;t.end_tile=1;t.rectangles={{0,0,80,16}};
+      check(transfers.Encode(packet,t,error));
+      SurfaceView output{destination.id};
+      if(samples>1) {auto resolved=target(Format::RGBA8,1);packet.surfaces.push_back(resolved);
+        packet.commands.push_back(Resolve{output,{resolved.id},ResolveFilter::Average});output={resolved.id};}
+      auto retained=std::make_shared<const Frame>(std::move(packet));check(backend.Submit(retained,{},error));
+      check(backend.Drain(std::chrono::seconds(30),error));auto pixels=backend.ReadRGBA8(output,error);
+      check(pixels.size()==80*16*4);const int expected[]={0,60,0,64};
+      for(unsigned c=0;c<4;++c)check(std::to_integer<uint8_t>(pixels[(8*80+40)*4+c])==expected[c]);
+    }
+    // Host depth is the destination: preserve its full float32 value through
+    // a separate native snapshot before the ownership pass attaches it.
+    {
+      Frame packet;packet.sequence=20;
+      auto target=[&](Format f) {Surface s;s.id=next();s.format=f;s.width=80;s.height=16;
+        s.renderable=true;s.owner=std::make_shared<const Identity>(s.id);return s;};
+      auto color=target(Format::RGBA8),depth=target(Format::Depth32Stencil8),output=target(Format::RGBA8);
+      packet.surfaces={color,depth,output};
+      Pass pc;pc.width=80;pc.height=16;Attachment a;a.view={color.id};a.load=Load::Clear;
+      a.color={179.0/255,0,0,128.0/255};pc.colors[0]=a;packet.commands.push_back(pc);
+      Pass pd;pd.width=80;pd.height=16;a={};a.view={depth.id};a.load=Load::Clear;a.depth=.5;a.stencil=179;
+      pd.depth=pd.stencil=a;packet.commands.push_back(pd);
+      RexRenderTargets::OwnershipTransfer t{};t.source.pitch_tiles_at_32bpp=t.destination.pitch_tiles_at_32bpp=1;
+      t.source.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8);t.destination.is_depth=1;
+      t.source_image=color;t.destination_image=depth;t.host_depth_source=t.destination;t.host_depth_image=depth;
+      t.rectangles={{0,0,80,16}};t.first_tile=0;t.end_tile=1;
+      check(transfers.Encode(packet,t,error));
+      // Convert it back to color to verify depth and stencil, including the
+      // different depth/color 40-sample column arrangement.
+      t.source=t.destination;t.destination=t.host_depth_source.value();t.destination.is_depth=0;
+      t.destination.resource_format=uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8);
+      t.source_image=depth;t.destination_image=output;t.host_depth_source.reset();t.host_depth_image.reset();
+      check(transfers.Encode(packet,t,error));check(backend.Submit(std::make_shared<const Frame>(std::move(packet)),{},error));
+      check(backend.Drain(std::chrono::seconds(30),error));auto pixels=backend.ReadRGBA8({output.id},error);
+      check(pixels.size()==80*16*4);const int expected[]={179,0,0,128};
+      for(unsigned c=0;c<4;++c)check(std::abs(int(std::to_integer<uint8_t>(pixels[(8*80+40)*4+c]))-expected[c])<=1);
+    }
+    std::cout<<"Native target transfer pixels passed: half bits, integer views, 1x/2x/4x MSAA, depth/stencil and host-depth snapshot\n";
   }
 #endif
 }

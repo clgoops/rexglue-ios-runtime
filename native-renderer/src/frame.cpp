@@ -12,11 +12,14 @@ FormatInfo Describe(Format format) {
     case Format::R8:return {1,1,1,true};
     case Format::RG8:return {1,1,2,true};
     case Format::RGBA8:case Format::RGBA8Srgb:case Format::BGRA8:case Format::BGRA8Srgb:
-    case Format::RGB10A2:case Format::RG16Float:case Format::R32Float:return {1,1,4,true};
-    case Format::RGBA16Float:case Format::RG32Float:return {1,1,8,true};
+    case Format::RGB10A2:case Format::RG16Float:case Format::RG16Snorm:case Format::R32Float:
+    case Format::RG16Uint:case Format::R32Uint:return {1,1,4,true};
+    case Format::RGBA16Float:case Format::RGBA16Snorm:case Format::RG32Float:
+    case Format::RGBA16Uint:case Format::RG32Uint:return {1,1,8,true};
     case Format::RGBA32Float:return {1,1,16,true};
     case Format::Depth32Float:return {1,1,4,false,true};
     case Format::Depth32Stencil8:return {1,1,8,false,true,true};
+    case Format::Stencil8View:return {1,1,8,false,false,true};
     case Format::BC1:case Format::BC1Srgb:case Format::BC4:case Format::BC4Signed:return {4,4,8,true};
     case Format::BC2:case Format::BC2Srgb:case Format::BC3:case Format::BC3Srgb:
     case Format::BC5:case Format::BC5Signed:case Format::BC6Float:case Format::BC6SignedFloat:
@@ -27,6 +30,16 @@ FormatInfo Describe(Format format) {
 bool CompatibleView(Format a,Format b) {
   if(a==b)return Describe(a).bytes!=0;
   auto pair=[&](Format x,Format y){return (a==x&&b==y)||(a==y&&b==x);};
+  auto group=[&](std::initializer_list<Format> values) {
+    return std::find(values.begin(),values.end(),a)!=values.end() &&
+           std::find(values.begin(),values.end(),b)!=values.end();
+  };
+  if(group({Format::RG16Snorm,Format::RG16Float,Format::RG16Uint}) ||
+     group({Format::RGBA16Snorm,Format::RGBA16Float,Format::RGBA16Uint}) ||
+     pair(Format::R32Float,Format::R32Uint) || pair(Format::RG32Float,Format::RG32Uint))return true;
+  // Metal's X32_Stencil8 is a sampled view of Depth32Float_Stencil8. It is
+  // never a storage allocation, color target, or reciprocal depth view.
+  if(a==Format::Depth32Stencil8 && b==Format::Stencil8View)return true;
   return pair(Format::RGBA8,Format::RGBA8Srgb)||pair(Format::BGRA8,Format::BGRA8Srgb)||
       pair(Format::BC1,Format::BC1Srgb)||pair(Format::BC2,Format::BC2Srgb)||
       pair(Format::BC3,Format::BC3Srgb)||pair(Format::BC7,Format::BC7Srgb)||
@@ -167,7 +180,7 @@ struct Admission {
       const auto f=Describe(s.format);
       const uint32_t biggest=std::max({s.width,s.height,s.depth});
       uint32_t max_levels=0;for(uint32_t n=biggest;n;n>>=1)++max_levels;
-      if(!s.owner||!f.bytes||!Enum(s.kind)||!s.width||!s.height||!s.depth||!s.layers||!s.levels||s.levels>max_levels||
+      if(!s.owner||!f.bytes||s.format==Format::Stencil8View||!Enum(s.kind)||!s.width||!s.height||!s.depth||!s.layers||!s.levels||s.levels>max_levels||
          biggest>limits.max_dimension||s.layers>2048||!PowerOfTwo(s.samples)||s.samples>8||
          (s.samples>1&&(s.levels!=1||s.kind!=TextureKind::TwoD||!s.renderable))||
          (s.kind!=TextureKind::ThreeD&&s.depth!=1)||

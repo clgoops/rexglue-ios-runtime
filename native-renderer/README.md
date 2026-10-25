@@ -26,6 +26,16 @@ Implemented:
   boundaries and faults rejected frame scopes rather than continuing with
   incorrect coherence metadata. This adapter has compile validation only so far;
   guest concurrency and full-game integration remain unverified.
+- Draw-state preparation now uses the SDK's register math, shader modification
+  keys, texture signs, depth flags and color exponent biases with an explicit
+  native capability profile.
+- The target adapter retains the SDK's EDRAM ownership tracker. Its default
+  transfer encoder uses the SDK's bit-preserving format conversion shaders,
+  native 1x/2x/4x MSAA, integer format views and depth/stencil output. When retained
+  host depth is also the destination, a preceding native depth snapshot avoids
+  illegal attachment feedback. CPU checks cover 1,836 shader combinations and
+  frame admission; the new Apple compilation and GPU pixel cases are pending.
+  Resolve-to-guest-memory and the live command processor are not connected yet.
 
 First backend validation (`c9564f9`, workflow run `40189292454`) passed 57 CPU
 contracts, their ASan/UBSan run, and 16 actual Metal GPU cases with 134 checks.
