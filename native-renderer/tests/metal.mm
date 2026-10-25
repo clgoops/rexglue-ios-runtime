@@ -133,5 +133,16 @@ int main(){@autoreleasepool {
     {MetalBackend backend;Check(backend.ConfigureBinaryArchive(file.path.UTF8String,failure));Submit(backend,Triangle());Pixel(backend,View(1),8,8,{255,0,0,255});}
     [NSFileManager.defaultManager removeItemAtURL:[file URLByDeletingLastPathComponent] error:nil];Done("native pipeline archive save and reload");
   }
+  {
+    MetalBackend backend;auto f=Triangle();f.output.reset();f.surfaces.clear();f.buffers.clear();
+    auto& pipeline=f.pipelines[0];pipeline.colors={};auto& pass=std::get<Pass>(f.commands[0]);pass.colors={};pass.mergeable=false;
+    f.buffer_storage={{Id(500),1024,true,std::make_shared<const int>(1)}};
+    auto& fragment=f.shaders[1];fragment.arguments={{ArgumentKind::Buffer,0,1,1024,4,TextureKind::TwoD,false,true}};
+    fragment.msl="#include <metal_stdlib>\nusing namespace metal;fragment void pixel_main(float4 p[[position]],device uint* output[[buffer(0)]]){output[uint(p.y)*16+uint(p.x)]=1u;}";
+    fragment.entry="pixel_main";std::get<Draw>(pass.commands[0]).bindings[1].buffers={{0,{Id(500),0,1024}}};
+    Submit(backend,std::move(f));auto bytes=backend.ReadBuffer({Id(500),0,1024},failure);Check(bytes.size()==1024);
+    for(unsigned i=0;i<256;++i) {uint32_t value;std::memcpy(&value,bytes.data()+i*4,4);Check(value==1);}
+    Done("attachmentless fragment memory export with explicit raster dimensions");
+  }
   std::cout<<cases<<" native GPU cases and "<<checks<<" checks passed"<<std::endl;
 }}

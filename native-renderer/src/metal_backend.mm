@@ -542,6 +542,7 @@ struct MetalBackend::Impl {
   }
   bool Render(id<MTLCommandBuffer> cb,const Pass& pass,std::shared_ptr<FrameLease> lease,std::string& error){
     auto desc=[MTLRenderPassDescriptor new];desc.renderTargetWidth=pass.width;desc.renderTargetHeight=pass.height;
+    desc.defaultRasterSampleCount=pass.samples;
     for(size_t i=0;i<4;++i)if(pass.colors[i]){
       auto a=desc.colorAttachments[i];Attachment(a,*pass.colors[i],error);if(!a.texture)return false;
       const auto& c=pass.colors[i]->color;a.clearColor=MTLClearColorMake(c[0],c[1],c[2],c[3]);

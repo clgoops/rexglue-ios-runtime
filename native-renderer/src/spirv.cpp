@@ -11,7 +11,7 @@
 
 namespace rex::native {
 namespace {
-using namespace spirv_cross;
+using namespace SPIRV_CROSS_NAMESPACE;
 struct Failure:std::runtime_error {using std::runtime_error::runtime_error;};
 void Require(bool ok,const char* message) {if(!ok)throw Failure(message);}
 spv::ExecutionModel Model(Stage stage) {

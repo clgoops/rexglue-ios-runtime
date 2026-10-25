@@ -54,6 +54,7 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
     CallInThread([this] {std::string error;if(!Flush(error)||!service_->Drain(error)) {Fail(error);return;}
       if(textures_)textures_->ClearCache();});
   }
+  void InvalidateGpuMemory() override {if(shared_)shared_->InvalidateAllPages();}
  protected:
   bool SetupContext() override;
   void ShutdownContext() override;
@@ -209,6 +210,10 @@ bool NativeCommandProcessor::IssueDraw(gfx::xenos::PrimitiveType,uint32_t,IndexB
   if(vs->memexport_eM_written())gfx::draw_util::AddMemExportRanges(regs,*vs,exports);if(ps&&ps->memexport_eM_written())gfx::draw_util::AddMemExportRanges(regs,*ps,exports);
   for(const auto& r:exports)if(!shared_->RequestRange(r.base_address_dwords<<2,r.size_bytes))return Fail("native memexport memory upload failed");
   if(memexport&&exports.empty()&&!shared_->RequestRange(0,gfx::SharedMemory::kBufferSize))return Fail("native unknown memexport residency failed");
+  if(!raster&&primitive.index_buffer_type!=gfx::PrimitiveProcessor::kNone) {
+    uint32_t length=primitive.guest_draw_vertex_count*(regs.Get<gfx::reg::VGT_DRAW_INITIATOR>().index_size==gfx::xenos::IndexFormat::kInt16?2:4);
+    if(!shared_->RequestRange(primitive.guest_index_base,length))return Fail("native compute index memory upload failed");
+  }
   std::vector<const ConvertedShader*> stages={vertex};if(pixel)stages.push_back(pixel);
   std::vector<DescriptorResources> resources={shared_->Descriptor()};gfx::Shader::ConstantRegisterMap empty_map{};
   if(!constants_.Prepare(system_,regs,vm,ps?ps->constant_register_map():empty_map,stages,next_,*frame_,resources,error)||!Resources(*vs,*vertex,resources,error)||(ps&&!Resources(*ps,*pixel,resources,error)))return Fail(error);
@@ -250,6 +255,7 @@ bool NativeCommandProcessor::Readback(uint32_t address,uint32_t length,std::stri
   while(length) {
     uint32_t amount=std::min(length,32u<<20);if(!Begin(error))return false;
     auto source=shared_->ContiguousView(address,amount,next_,error);if(!source)return false;
+    auto readback_owner=frame_; // Preserve a cross-chunk staging allocation through the CPU copy.
     if(!Flush(error))return false;std::lock_guard lock(service_->mutex);
     if(!service_->backend.Drain(std::chrono::seconds(30),error))return false;
     auto bytes=service_->backend.ReadBuffer(*source,error);if(bytes.size()!=amount)return false;

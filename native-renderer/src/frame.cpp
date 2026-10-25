@@ -151,14 +151,13 @@ struct Admission {
   }
   bool PassValid(const Pass& p) {
     if(++passes>limits.max_passes||!p.width||!p.height||p.width>limits.max_dimension||p.height>limits.max_dimension||!PowerOfTwo(p.samples)||p.samples>8)return Fail("Invalid pass extent or sample count");
-    bool attached=false;std::set<SurfaceView> colors;
+    std::set<SurfaceView> colors;
     for(const auto& a:p.colors)if(a) {
-      attached=true;if(!AttachmentValid(*a,p,0)||!colors.insert(a->view).second)return Fail("Invalid or repeated color attachment");
+      if(!AttachmentValid(*a,p,0)||!colors.insert(a->view).second)return Fail("Invalid or repeated color attachment");
     }
-    if(p.depth){attached=true;if(!AttachmentValid(*p.depth,p,1))return Fail("Invalid depth attachment");}
-    if(p.stencil){attached=true;if(!AttachmentValid(*p.stencil,p,2))return Fail("Invalid stencil attachment");}
+    if(p.depth){if(!AttachmentValid(*p.depth,p,1))return Fail("Invalid depth attachment");}
+    if(p.stencil){if(!AttachmentValid(*p.stencil,p,2))return Fail("Invalid stencil attachment");}
     if(p.depth&&p.stencil&&p.depth->view!=p.stencil->view)return Fail("Separate depth/stencil storage is not supported by this contract");
-    if(!attached)return Fail("Attachmentless pass requires an explicit lowering");
     for(const auto& command:p.commands) {
       if(const auto* draw=std::get_if<Draw>(&command)){if(!DrawValid(*draw,p))return false;continue;}
       const auto& c=std::get<RectClear>(command);
