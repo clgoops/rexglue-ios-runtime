@@ -11,14 +11,32 @@ jobs:
       - uses: actions/checkout@v4
       - name: Audit reviewed source inputs
         run: python3 tools/audit-inputs.py
+      - name: Fetch pinned shader translator dependencies
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/KhronosGroup/SPIRV-Cross.git spirv-cross-src
+          git -C spirv-cross-src checkout adec7acbf41a988713cdb85f93f26c8ca5ea863e
+          git clone --no-checkout https://github.com/rexglue/rexglue-sdk.git sdk
+          git -C sdk checkout c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
+          git -C sdk submodule update --init --depth 1 --jobs 3 thirdparty/fmt thirdparty/glslang thirdparty/vulkan-headers thirdparty/xxHash thirdparty/spirv-tools thirdparty/spirv-headers
       - name: Build native frame and Metal backend on Mac
         run: |
           set -euo pipefail
-          cmake -S native-renderer -B native-host -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S native-renderer -B native-host -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX_NATIVE_SPIRV_CROSS_DIR="$GITHUB_WORKSPACE/spirv-cross-src" -DREX_NATIVE_REXSDK_DIR="$GITHUB_WORKSPACE/sdk"
           cmake --build native-host --parallel 3 2>&1 | tee native-host-build.log
           ./native-host/native-frame-tests | tee native-frame-tests.log
+          ./native-host/native-spirv-tests | tee native-spirv-tests.log
+          ./native-host/native-rex-shader-tests actual-translator-msl | tee native-rex-shader-tests.log
           xcrun clang++ -std=c++23 -O1 -g -fsanitize=address,undefined -Inative-renderer/include native-renderer/src/frame.cpp native-renderer/tests/frame.cpp -o native-contract-sanitizers
           ./native-contract-sanitizers | tee native-contract-sanitizers.log
+      - name: Compile converted SDK kernels and actual translator output with Apple Metal
+        run: |
+          set -euo pipefail
+          if ! xcrun --find metal; then xcodebuild -downloadComponent MetalToolchain; fi
+          python3 native-renderer/tools/check-sdk-shaders.py --sdk sdk --exporter native-host/native-shader-export --output sdk-native-msl --apple-sdk iphoneos | tee native-sdk-shader-tests.log
+          for source in actual-translator-msl/*.metal; do
+            xcrun --sdk iphoneos metal -std=metal2.3 -fno-fast-math -mios-version-min=18.0 -c "$source" -o "${source%.metal}.air"
+          done
       - name: Run native Metal pixel cases when the runner exposes a GPU
         run: |
           set -uo pipefail
@@ -31,14 +49,21 @@ jobs:
           else
             exit "$status"
           fi
+          MTL_DEBUG_LAYER=1 ./native-host/native-metal-spirv-tests 2>&1 | tee native-metal-spirv-tests.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != 77 ] && [ "$status" != 0 ]; then exit "$status"; fi
+          python3 -c 'import json,sys;json.dump({"gpu_available":sys.argv[1]=="0","pixel_validation":"passed" if sys.argv[1]=="0" else "unavailable"},open("gpu-spirv-result.json","w"))' "$status"
       - name: Compile the actual backend for iOS ARM64
         run: |
           set -euo pipefail
-          cmake -S native-renderer -B native-ios -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DREX_NATIVE_BUILD_TESTS=OFF
+          cmake -S native-renderer -B native-ios -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DREX_NATIVE_BUILD_TESTS=OFF -DREX_NATIVE_SPIRV_CROSS_DIR="$GITHUB_WORKSPACE/spirv-cross-src" -DREX_NATIVE_REXSDK_DIR="$GITHUB_WORKSPACE/sdk"
           cmake --build native-ios --parallel 3 2>&1 | tee native-ios-build.log
           xcrun --sdk iphoneos clang++ -std=c++23 -fobjc-arc -arch arm64 -miphoneos-version-min=18.0 -Inative-renderer/include -c native-renderer/tests/metal.mm -o native-metal-tests-ios.o
           mkdir -p native-artifact
           cp native-ios/librex-native-metal.dylib native-artifact/
+          cp native-ios/librex-native-frame.a native-ios/librex-native-spirv.a native-ios/librex-native-rex-adapters.a native-artifact/
+          cp native-ios/spirv-cross/libspirv-cross-core.a native-ios/spirv-cross/libspirv-cross-glsl.a native-ios/spirv-cross/libspirv-cross-msl.a native-artifact/
+          cp spirv-cross-src/LICENSE native-artifact/SPIRV-Cross-LICENSE
           otool -L native-artifact/librex-native-metal.dylib > native-artifact/load-commands.txt
           shasum -a 256 native-artifact/librex-native-metal.dylib > native-artifact/SHA256.txt
       - uses: actions/upload-artifact@v4
@@ -51,6 +76,12 @@ jobs:
             native-host-build.log
             native-ios-build.log
             native-frame-tests.log
+            native-spirv-tests.log
+            native-rex-shader-tests.log
+            native-sdk-shader-tests.log
+            sdk-native-msl/report.json
+            native-metal-spirv-tests.log
+            gpu-spirv-result.json
             native-contract-sanitizers.log
             native-metal-tests.log
             gpu-result.json
