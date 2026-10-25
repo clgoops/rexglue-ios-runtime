@@ -1,21 +1,33 @@
 {
-  "implementation_commit": "850df3da4240ca4254e19f37b449343164be4e26",
-  "workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40209298630",
+  "implementation_commit": "0af809b58bb9dd2f2ae98261166f2f7d3f2ab185",
+  "workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40214247006",
   "target": "iOS ARM64; deployment target 18.0",
-  "cpu_frame_checks": 57,
+  "cpu_frame_checks": 64,
   "cpu_shader_binding_checks": 32,
   "actual_translator_modules": 27,
-  "actual_translator_and_constant_checks": 334,
   "ios_metal_host_modules_compiled": 96,
-  "unsupported_host_modules": ["passthrough_position_xy_vs: vertex attribute adapter required"],
+  "unsupported_host_modules": [
+    "passthrough_position_xy_vs: vertex attribute adapter required"
+  ],
   "gpu_available": true,
   "baseline_gpu_cases": 16,
   "baseline_gpu_checks": 134,
   "sdk_gamma_and_compute_clear_pixel_checks": 21,
   "actual_microcode_to_metal_draw_pixels": "passed: two frames with distinct constant snapshots",
   "frame_asan_ubsan": "passed",
-  "native_metal_dylib_sha256": "2c2c4c754113cb07220aa9b168db907510b6fbc7d3fbffcf4ab93263d235e418",
+  "native_metal_dylib_sha256": "891285c229622d4bcae6e8547954f202c7fe84a0363332968e552aa95338b34d",
   "live_blur_integration": false,
   "blur_performance_improvement_measured": false,
-  "installable_ipa_produced_by_this_stage": false
+  "installable_ipa_produced_by_this_stage": false,
+  "cpu_rex_frontend_checks": 4019,
+  "edram_transfer_shader_variants_converted": 1836,
+  "native_target_gpu_cases": {
+    "half_bits_integer_views": [
+      "1x MSAA",
+      "2x MSAA",
+      "4x MSAA"
+    ],
+    "depth_stencil_round_trip": "single-sample with retained host-depth snapshot"
+  },
+  "native_target_bridge_compiled_for_ios_arm64": true
 }

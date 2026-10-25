@@ -34,7 +34,10 @@ Implemented:
   native 1x/2x/4x MSAA, integer format views and depth/stencil output. When retained
   host depth is also the destination, a preceding native depth snapshot avoids
   illegal attachment feedback. CPU checks cover 1,836 shader combinations and
-  frame admission; the new Apple compilation and GPU pixel cases are pending.
+  frame admission. Apple run `40214247006` passed the iOS shader compilation,
+  actual Metal transfer pixel cases and iOS ARM64 adapter build. The pixel cases
+  cover half-bit reinterpretation with integer views at 1x/2x/4x MSAA and a
+  single-sample depth/stencil round trip with retained host-depth snapshot.
   Resolve-to-guest-memory and the live command processor are not connected yet.
 
 First backend validation (`c9564f9`, workflow run `40189292454`) passed 57 CPU
@@ -59,6 +62,14 @@ alive. The 334 translator/constant checks, 32 shader-binding checks, 57 frame
 contracts, sanitizer checks, all 96 supported iOS shader compilations and the
 prior GPU cases passed. The actual shader adapter compiled for iOS ARM64 too.
 These fixtures do not establish Blur frame fidelity or performance.
+
+The target stage (`0af809b`, run `40214247006`) passed 64 frame contracts,
+ASan/UBSan, 32 binding checks, 1,836 ownership shader conversions and 4,019
+combined frontend checks. The earlier Metal cases passed again, followed by
+the native target cases above. The build artifact's iOS ARM64 native backend
+hash is recorded in `VALIDATION.json`. Target ownership now has a native encoder;
+the game factory, command submission, guest texture loading and resolve path
+still require integration. There is no playable native-game IPA from this stage.
 
 Local shader validation converts 96 of 97 pinned SDK host shaders. The remaining
 `passthrough_position_xy_vs` uses vertex attributes; the backend currently uses
