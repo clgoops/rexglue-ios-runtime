@@ -9,7 +9,7 @@
     "diagnostics/latest-session-export.mm": "b60c760aa02fe15d39e4e4f6b73dc328be2fdfe5044c4f97f9a31e0774946044",
     "diagnostics/latest-session-ui.h": "5e969b8572c60db35961fccfb66a60804fe6937258bb2ab6abd7128563f00968",
     "diagnostics/latest-session-ui.mm": "ccb9604059a5032c046ad2085b1a09542d3448b07327cfe3badce2e128276d31",
-    "diagnostics/LICENSE": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5",
+    "diagnostics/LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE": "8e065be1da2ff9a16b1f063d4636d8b67e6a654bb90583ea4332e66ac421bb18",
     "optimizer-tests/CMakeLists.txt": "24c7643beab9a54f106fd8874a146876233feec370c0c8f75a5b983c8e0e96c6",
     "optimizer-tests/extract-module.py": "3d5025c67c103499478e8e3cae274c55fbb26f93a1694bf2d1d4865b37d20784",
