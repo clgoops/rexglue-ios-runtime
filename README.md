@@ -25,6 +25,16 @@ retains/retries the original module. It does not enable float relaxation or
 half precision. The pinned SPIRV-Tools implementation is statically linked;
 upstream license notices are collected with the runtime artifacts. The Mac job
 tests the optimizer and actual module-creation fallback and compiles them for iOS.
+Validation uses the uniform-buffer-standard and scalar-block-layout features
+actually enabled on the Vulkan device, for both optimizer input and output.
+Default validator layout rules reject the translator's packed system constants
+before optimization; patch 022 fixes that fallback bug without skipping validation
+or changing the uniform-buffer ABI. A separate test target compiles the actual
+translator and covers empty, ALU and dynamically addressed register shaders in
+SPIR-V 1.0, 1.3 and 1.5, including disabled-feature rejection. It is run on Mac
+and compiled for iOS ARM64. Constructed-kernel tests also exercise feature-aware
+module creation and still reject misaligned data even with scalar layout enabled.
+These checks do not execute a GPU or use game shaders.
 Device rendering and performance remain unverified. Sparse pass sampling now
 defaults Off; ordinary performance metrics remain available.
 

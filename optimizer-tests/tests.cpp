@@ -22,6 +22,8 @@ static std::vector<uint32_t> submitted_module;
 #define REXGPU_ERROR(...) ((void)0)
 namespace rex::ui::vulkan {
 struct VulkanDevice {
+ struct Properties {bool uniformBufferStandardLayout=false,scalarBlockLayout=false;} properties_;
+ const Properties& properties()const{return properties_;}
  struct Functions {
   VkResult vkCreateShaderModule(VkDevice,const VkShaderModuleCreateInfo* info,const VkAllocationCallbacks*,VkShaderModule* out)const {
    ++module_calls;submitted_module.assign(info->pCode,info->pCode+info->codeSize/4);
@@ -173,5 +175,40 @@ int main(){
   Check(t.GetOrCreateShaderModule()!=VK_NULL_HANDLE&&module_calls==1&&submitted_module==code);
   optimization_enabled=true;t=make(invalid);module_calls=0;
   Check(t.GetOrCreateShaderModule()!=VK_NULL_HANDLE&&module_calls==1&&submitted_module==invalid);
+
+  // Packed uniform data uses the same scalar-layout requirement as the real
+  // translator's system constants. Feature-disabled devices must still reject.
+  std::string packed=Kernel(42);
+  packed.replace(packed.find("%main \"main\" %buffer"),std::string("%main \"main\" %buffer").size(),"%main \"main\" %buffer %packedUniform");
+  packed.insert(packed.find("%void ="),R"(
+OpDecorate %packedBlock Block
+OpMemberDecorate %packedBlock 0 Offset 0
+OpMemberDecorate %packedBlock 1 Offset 4
+OpDecorate %packedArray ArrayStride 16
+OpDecorate %packedUniform DescriptorSet 2
+OpDecorate %packedUniform Binding 1
+)");
+  packed.insert(packed.find("%main ="),R"(
+%vec4 = OpTypeVector %float 4
+%packedArray = OpTypeArray %vec4 %four
+%packedBlock = OpTypeStruct %uint %packedArray
+%packedPtr = OpTypePointer Uniform %packedBlock
+%packedUniform = OpVariable %packedPtr Uniform
+)");
+  Check(tools.Assemble(packed,&code));
+  Check(!OptimizeSpirvRegisters(code,output,stats,error,{}));Check(output.empty());
+  Check(!OptimizeSpirvRegisters(code,output,stats,error,{true,false}));Check(output.empty());
+  Check(OptimizeSpirvRegisters(code,output,stats,error,{false,true}));
+  Check(OptimizeSpirvRegisters(code,output,stats,error,{true,true}));
+  device.properties_={true,false};t=make(code);module_calls=0;
+  Check(t.GetOrCreateShaderModule()!=VK_NULL_HANDLE&&module_calls==1&&submitted_module==code);
+  device.properties_={false,true};t=make(code);module_calls=0;
+  Check(t.GetOrCreateShaderModule()!=VK_NULL_HANDLE&&module_calls==1&&submitted_module!=code);
+  device.properties_={true,true};t=make(code);module_calls=0;
+  Check(t.GetOrCreateShaderModule()!=VK_NULL_HANDLE&&module_calls==1&&submitted_module!=code);
+  // Scalar layout does not excuse a two-byte-misaligned vec4 member.
+  packed.replace(packed.find("1 Offset 4"),std::string("1 Offset 4").size(),"1 Offset 2");
+  Check(tools.Assemble(packed,&code));
+  Check(!OptimizeSpirvRegisters(code,output,stats,error,{true,true}));Check(output.empty());
   std::printf("%u register promotion, bit preservation, dynamic-address and fallback checks passed\n",checks);
 }

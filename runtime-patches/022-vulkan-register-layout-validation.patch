@@ -1,0 +1,74 @@
+diff --git a/include/rex/graphics/vulkan/spirv_register_optimizer.h b/include/rex/graphics/vulkan/spirv_register_optimizer.h
+--- a/include/rex/graphics/vulkan/spirv_register_optimizer.h
++++ b/include/rex/graphics/vulkan/spirv_register_optimizer.h
+@@ -9,8 +9,13 @@
+   uint32_t loads_before=0, loads_after=0, stores_before=0, stores_after=0;
+   uint32_t function_variables_before=0, function_variables_after=0;
+ };
++struct SpirvRegisterLayout {
++  bool uniform_buffer_standard_layout=false;
++  bool scalar_block_layout=false;
++};
+ // Output is committed only after validation and preservation of global variables,
+ // execution modes, entry points and specialization constants. Failure leaves it empty.
+ bool OptimizeSpirvRegisters(std::span<const uint32_t> input, std::vector<uint32_t>& output,
+-                            SpirvRegisterStats& stats, std::string& error);
++                            SpirvRegisterStats& stats, std::string& error,
++                            SpirvRegisterLayout layout = {});
+ }  // namespace rex::graphics::vulkan
+diff --git a/src/graphics/vulkan/spirv_register_optimizer.cpp b/src/graphics/vulkan/spirv_register_optimizer.cpp
+--- a/src/graphics/vulkan/spirv_register_optimizer.cpp
++++ b/src/graphics/vulkan/spirv_register_optimizer.cpp
+@@ -38,7 +38,8 @@
+ }
+ }
+ bool OptimizeSpirvRegisters(std::span<const uint32_t> input, std::vector<uint32_t>& output,
+-                            SpirvRegisterStats& stats, std::string& error) {
++                            SpirvRegisterStats& stats, std::string& error,
++                            SpirvRegisterLayout layout) {
+   output.clear();stats={};error.clear();Contract before,after;
+   if (!Inspect(input,before,stats.loads_before,stats.stores_before,stats.function_variables_before)) {
+     error="Malformed SPIR-V";return false;
+@@ -58,11 +59,18 @@
+   optimizer.RegisterPass(spvtools::CreateDeadInsertElimPass());
+   optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass(true, false));
+   spvtools::OptimizerOptions options;
++  // Validate against the features enabled on the Vulkan device. The translator's
++  // packed system constants require scalarBlockLayout. Default layout rules
++  // reject that block before any optimization and silently force the original.
++  spvtools::ValidatorOptions validation_options;
++  validation_options.SetUniformBufferStandardLayout(layout.uniform_buffer_standard_layout);
++  validation_options.SetScalarBlockLayout(layout.scalar_block_layout);
++  options.set_validator_options(validation_options);
+   options.set_run_validator(true);options.set_preserve_bindings(true);options.set_preserve_spec_constants(true);
+   std::vector<uint32_t> candidate;
+   if (!optimizer.Run(input.data(),input.size(),&candidate,options)) return false;
+   spvtools::SpirvTools validator(SPV_ENV_VULKAN_1_2);validator.SetMessageConsumer(consumer);
+-  if (!validator.Validate(candidate) || !Inspect(candidate,after,stats.loads_after,
++  if (!validator.Validate(candidate.data(),candidate.size(),validation_options) || !Inspect(candidate,after,stats.loads_after,
+       stats.stores_after,stats.function_variables_after)) return false;
+   if (before!=after) {error="Shader interface/execution contract changed";return false;}
+   output=std::move(candidate);error.clear();return true;
+diff --git a/src/graphics/vulkan/shader.cpp b/src/graphics/vulkan/shader.cpp
+--- a/src/graphics/vulkan/shader.cpp
++++ b/src/graphics/vulkan/shader.cpp
+@@ -44,13 +44,16 @@
+   const auto original=std::span(reinterpret_cast<const uint32_t*>(translated_binary().data()),
+                                 translated_binary().size()/sizeof(uint32_t));
+   bool use_optimized=REXCVAR_GET(vulkan_optimize_registers) &&
+-      OptimizeSpirvRegisters(original,optimized,optimization_stats,optimization_error);
++      OptimizeSpirvRegisters(original,optimized,optimization_stats,optimization_error,
++                            {vulkan_device->properties().uniformBufferStandardLayout,
++                             vulkan_device->properties().scalarBlockLayout});
+   if (REXCVAR_GET(vulkan_optimize_registers)) {
+-    REXGPU_INFO("Shader register optimization: shader={:016X} modification={:016X} accepted={} words={}/{} locals={}/{} loads={}/{} stores={}/{} reason={}",
++    REXGPU_INFO("Shader register optimization: shader={:016X} modification={:016X} accepted={} words={}/{} locals={}/{} loads={}/{} stores={}/{} reason={} uniform_standard={} scalar_layout={}",
+       shader().ucode_data_hash(),modification(),use_optimized,original.size(),use_optimized?optimized.size():original.size(),
+       optimization_stats.function_variables_before,optimization_stats.function_variables_after,
+       optimization_stats.loads_before,optimization_stats.loads_after,optimization_stats.stores_before,optimization_stats.stores_after,
+-      use_optimized?"validated":optimization_error);
++      use_optimized?"validated":optimization_error,
++      vulkan_device->properties().uniformBufferStandardLayout,vulkan_device->properties().scalarBlockLayout);
+   }
+   VkShaderModuleCreateInfo shader_module_create_info;
+   shader_module_create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;

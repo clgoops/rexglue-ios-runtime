@@ -21,3 +21,32 @@ execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ext
 target_include_directories(register-opt-tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${REXSDK_DIR}/include"
   "${REXSDK_DIR}/thirdparty/spirv-headers/include" "${REXSDK_DIR}/thirdparty/vulkan-headers/include")
 target_link_libraries(register-opt-tests PRIVATE SPIRV-Tools-opt)
+
+# Exercise the actual translator, not just hand-written SPIR-V kernels.
+set(SDK "${REXSDK_DIR}")
+add_executable(register-translator-tests translator-tests.cpp
+  "${SDK}/src/core/string_buffer.cpp"
+  "${SDK}/src/graphics/format/ucode.cpp"
+  "${SDK}/src/graphics/pipeline/shader/shader.cpp"
+  "${SDK}/src/graphics/pipeline/shader/translator.cpp"
+  "${SDK}/src/graphics/pipeline/shader/translator_disasm.cpp"
+  "${SDK}/src/graphics/pipeline/shader/spirv.cpp"
+  "${SDK}/src/graphics/pipeline/shader/spirv_builder.cpp"
+  "${SDK}/src/graphics/pipeline/shader/spirv_translator.cpp"
+  "${SDK}/src/graphics/pipeline/shader/spirv_translator_alu.cpp"
+  "${SDK}/src/graphics/pipeline/shader/spirv_translator_fetch.cpp"
+  "${SDK}/src/graphics/pipeline/shader/spirv_translator_memexport.cpp"
+  "${SDK}/src/graphics/pipeline/shader/spirv_translator_rb.cpp"
+  "${SDK}/src/graphics/vulkan/spirv_register_optimizer.cpp"
+  "${SDK}/thirdparty/glslang/SPIRV/SpvBuilder.cpp"
+  "${SDK}/thirdparty/glslang/SPIRV/SpvPostProcess.cpp"
+  "${SDK}/thirdparty/glslang/SPIRV/InReadableOrder.cpp"
+  "${SDK}/thirdparty/glslang/SPIRV/Logger.cpp")
+target_include_directories(register-translator-tests PRIVATE stubs "${SDK}/include"
+  "${SDK}/thirdparty/fmt/include" "${SDK}/thirdparty/glslang"
+  "${SDK}/thirdparty/spirv-tools/include" "${SDK}/thirdparty/spirv-headers/include"
+  "${SDK}/thirdparty/vulkan-headers/include" "${SDK}/thirdparty/xxhash"
+  "${SDK}/thirdparty/renderdoc")
+target_compile_definitions(register-translator-tests PRIVATE NDEBUG FMT_HEADER_ONLY _CRT_SECURE_NO_WARNINGS)
+target_compile_options(register-translator-tests PRIVATE -O2 -Wno-unused-variable)
+target_link_libraries(register-translator-tests PRIVATE SPIRV-Tools-opt)
