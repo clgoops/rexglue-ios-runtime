@@ -1,0 +1,56 @@
+name: Build native Metal frame backend
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-renderer:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit reviewed source inputs
+        run: python3 tools/audit-inputs.py
+      - name: Build native frame and Metal backend on Mac
+        run: |
+          set -euo pipefail
+          cmake -S native-renderer -B native-host -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build native-host --parallel 3 2>&1 | tee native-host-build.log
+          ./native-host/native-frame-tests | tee native-frame-tests.log
+          xcrun clang++ -std=c++23 -O1 -g -fsanitize=address,undefined -Inative-renderer/include native-renderer/src/frame.cpp native-renderer/tests/frame.cpp -o native-contract-sanitizers
+          ./native-contract-sanitizers | tee native-contract-sanitizers.log
+      - name: Run native Metal pixel cases when the runner exposes a GPU
+        run: |
+          set -uo pipefail
+          MTL_DEBUG_LAYER=1 ./native-host/native-metal-tests 2>&1 | tee native-metal-tests.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" = 77 ]; then
+            python3 -c 'import json;json.dump({"gpu_available":False,"pixel_validation":"unavailable; no hardware result claimed"},open("gpu-result.json","w"))'
+          elif [ "$status" = 0 ]; then
+            python3 -c 'import json;json.dump({"gpu_available":True,"pixel_validation":"passed"},open("gpu-result.json","w"))'
+          else
+            exit "$status"
+          fi
+      - name: Compile the actual backend for iOS ARM64
+        run: |
+          set -euo pipefail
+          cmake -S native-renderer -B native-ios -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DREX_NATIVE_BUILD_TESTS=OFF
+          cmake --build native-ios --parallel 3 2>&1 | tee native-ios-build.log
+          xcrun --sdk iphoneos clang++ -std=c++23 -fobjc-arc -arch arm64 -miphoneos-version-min=18.0 -Inative-renderer/include -c native-renderer/tests/metal.mm -o native-metal-tests-ios.o
+          mkdir -p native-artifact
+          cp native-ios/librex-native-metal.dylib native-artifact/
+          otool -L native-artifact/librex-native-metal.dylib > native-artifact/load-commands.txt
+          shasum -a 256 native-artifact/librex-native-metal.dylib > native-artifact/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-metal-frame-backend
+          retention-days: 1
+          path: |
+            native-artifact/
+            native-host-build.log
+            native-ios-build.log
+            native-frame-tests.log
+            native-contract-sanitizers.log
+            native-metal-tests.log
+            gpu-result.json
