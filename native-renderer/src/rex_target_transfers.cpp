@@ -38,9 +38,10 @@ bool RexTargetTransfers::SnapshotDepth(Frame& frame,const Surface& source,Surfac
   if(!shader) {
     Shader s;s.id=next_();s.stage=Stage::Fragment;s.entry="native_depth_snapshot";
     s.arguments={{ArgumentKind::Texture,0,1,0,1,TextureKind::TwoD,bool(ms)}};
-    s.msl="#include <metal_stdlib>\nusing namespace metal;fragment float native_depth_snapshot(float4 p[[position]],";
-    if(ms)s.msl+="uint sample[[sample_id]],texture2d_ms<float> depth[[texture(0)]])[[depth(any)]]{return depth.read(uint2(p.xy),sample).x;}";
-    else s.msl+="texture2d<float> depth[[texture(0)]])[[depth(any)]]{return depth.read(uint2(p.xy)).x;}";
+    s.msl="#include <metal_stdlib>\nusing namespace metal;struct NativeDepth{float value[[depth(any)]];};"
+      "fragment NativeDepth native_depth_snapshot(float4 p[[position]],";
+    if(ms)s.msl+="uint sample[[sample_id]],texture2d_ms<float> depth[[texture(0)]]){return {depth.read(uint2(p.xy),sample).x};}";
+    else s.msl+="texture2d<float> depth[[texture(0)]]){return {depth.read(uint2(p.xy)).x};}";
     shader=std::move(s);
   }
   const unsigned index=std::countr_zero(source.samples);
@@ -50,11 +51,20 @@ bool RexTargetTransfers::SnapshotDepth(Frame& frame,const Surface& source,Surfac
     Pipeline p;p.id=next_();p.vertex=fullscreen_.id;p.fragment=shader->id;p.samples=source.samples;
     p.depth=Format::Depth32Float;p.depth_write=true;p.depth_compare=Compare::Always;pipeline=p;
   }
-  Surface snapshot=source;snapshot.id=next_();snapshot.format=Format::Depth32Float;
-  snapshot.owner=std::make_shared<const Identity>(snapshot.id);Add(frame.surfaces,snapshot);
+  const std::array<uint32_t,3> shape={source.width,source.height,source.samples};
+  auto* snapshot=snapshot_surfaces_.Find(shape);
+  if(!snapshot) {
+    Surface s=source;s.id=next_();s.format=Format::Depth32Float;
+    s.owner=std::make_shared<const Identity>(s.id);snapshot=&snapshot_surfaces_.Insert(shape,std::move(s));
+    snapshot_surfaces_.Trim(8);
+  }
+  // Every use writes before it reads, in order on the same native queue. Reuse
+  // storage rather than retain a new full-size depth image for every alias in
+  // one title frame. A retired cache entry remains owned by pending frames.
+  Add(frame.surfaces,*snapshot);
   Add(frame.shaders,fullscreen_);Add(frame.shaders,*shader);Add(frame.pipelines,*pipeline);
   Pass pass;pass.width=source.width;pass.height=source.height;pass.samples=source.samples;
-  output={snapshot.id};pass.depth=Attach(output);pass.depth->load=Load::Discard;
+  output={snapshot->id};pass.depth=Attach(output);pass.depth->load=Load::Discard;
   auto draw=Fullscreen(pipeline->id,pass.width,pass.height);
   draw.bindings[1].textures.push_back({0,{source.id}});pass.commands.push_back(draw);
   AppendPass(frame,std::move(pass));return true;

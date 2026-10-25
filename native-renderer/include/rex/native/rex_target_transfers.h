@@ -18,5 +18,6 @@ class RexTargetTransfers {
   Lru<std::array<uint32_t,8>,Entry> cache_;
   std::array<std::optional<Shader>,2> snapshot_shaders_;
   std::array<std::optional<Pipeline>,4> snapshot_pipelines_;
+  Lru<std::array<uint32_t,3>,Surface> snapshot_surfaces_;
 };
 } // namespace rex::native

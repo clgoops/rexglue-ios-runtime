@@ -109,6 +109,8 @@ int main(int argc,char** argv) {
     // The snapshot pass must precede the depth transfer; the destination
     // cannot be sampled while it is attached, including through stencil views.
     check(packet.surfaces.size()==4);
+    check(transfers.Encode(packet,transfer,error));check(Validate(packet,error));
+    check(packet.surfaces.size()==4); // Reuse ordered snapshot storage.
     transfer.rectangles={{79,0,2,16}};check(!transfers.Encode(packet,transfer,error));
   }
   for(uint32_t version:{spv::Spv_1_0,spv::Spv_1_3,spv::Spv_1_5}) {
