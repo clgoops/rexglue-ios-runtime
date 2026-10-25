@@ -26,3 +26,7 @@ target_compile_definitions(native-rex-shader-tests PRIVATE NDEBUG FMT_HEADER_ONL
 target_compile_options(native-rex-shader-tests PRIVATE -Wno-unused-variable)
 target_link_libraries(native-rex-shader-tests PRIVATE rex-native-rex-adapters)
 add_test(NAME native-rex-shaders COMMAND native-rex-shader-tests)
+if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  target_compile_definitions(native-rex-shader-tests PRIVATE REX_NATIVE_TEST_METAL=1)
+  target_link_libraries(native-rex-shader-tests PRIVATE rex-native-metal)
+endif()

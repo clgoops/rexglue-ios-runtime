@@ -5,7 +5,7 @@
 #include <cstring>
 #include <spirv.hpp>
 using namespace rex::native;
-static std::vector<uint32_t> ArrayLengthModule() {
+static std::vector<uint32_t> ArrayLengthModule(int workgroup=0) {
   using namespace spv;
   std::vector<uint32_t> w={0x07230203,0x00010500,0,128,0};
   auto op=[&](Op code,std::initializer_list<uint32_t> args) {w.push_back((uint32_t(args.size()+1)<<16)|uint32_t(code));w.insert(w.end(),args);};
@@ -15,9 +15,15 @@ static std::vector<uint32_t> ArrayLengthModule() {
   op(OpDecorate,{6,DecorationBlock});op(OpMemberDecorate,{6,0,DecorationOffset,0});
   op(OpDecorate,{40,DecorationDescriptorSet,0});op(OpDecorate,{40,DecorationBinding,7});op(OpDecorate,{40,DecorationNonWritable});
   op(OpDecorate,{41,DecorationDescriptorSet,0});op(OpDecorate,{41,DecorationBinding,8});op(OpDecorate,{11,DecorationSpecId,9});
+  if(workgroup)op(OpDecorate,{32,DecorationBuiltIn,BuiltInWorkgroupSize});
   op(OpTypeVoid,{1});op(OpTypeInt,{2,32,0});op(OpTypeFunction,{3,1});op(OpTypeRuntimeArray,{4,2});op(OpTypeStruct,{5,4});op(OpTypeStruct,{6,2});
   op(OpTypePointer,{7,StorageClassStorageBuffer,5});op(OpTypePointer,{8,StorageClassStorageBuffer,6});op(OpTypePointer,{9,StorageClassStorageBuffer,2});
   op(OpConstant,{2,10,0});op(OpSpecConstant,{2,11,5});op(OpVariable,{7,40,StorageClassStorageBuffer});op(OpVariable,{8,41,StorageClassStorageBuffer});
+  if(workgroup) {
+    op(OpTypeVector,{30,2,3});op(OpConstant,{2,31,1});
+    if(workgroup==1)op(OpSpecConstantComposite,{30,32,11,31,31});
+    else op(OpConstantComposite,{30,32,31,31,31});
+  }
   op(OpFunction,{1,100,FunctionControlMaskNone,3});op(OpLabel,{101});op(OpArrayLength,{2,102,40,0});op(OpIAdd,{2,103,102,11});
   op(OpAccessChain,{9,104,41,10});op(OpStore,{104,103});op(OpReturn,{});op(OpFunctionEnd,{});return w;
 }
@@ -72,5 +78,9 @@ int main() {
   check(BindConverted(shader,descriptors,{53,1},bindings,generated,error));
   memcpy(values,generated->bytes->data(),sizeof(values));check(values[0]==64 && values[1]==4);
   check(!ConvertSpirv(module,{50,2},Stage::Vertex,"main",shader,error));check(shader.resources.empty());
+  check(!ConvertSpirv(ArrayLengthModule(1),{50,3},Stage::Compute,"main",shader,error));
+  check(error.find("workgroup")!=std::string::npos);
+  check(ConvertSpirv(ArrayLengthModule(2),{50,4},Stage::Compute,"main",shader,error));
+  check(shader.workgroup_size==std::array<uint32_t,3>{1,1,1});
   printf("%u native shader binding contracts passed\n",checks);
 }

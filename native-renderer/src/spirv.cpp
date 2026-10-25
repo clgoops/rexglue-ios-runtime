@@ -178,9 +178,17 @@ bool ConvertSpirv(std::span<const uint32_t> words,Identity id,Stage stage,std::s
       // LocalSizeId needs the frontend to specialize before conversion; do not
       // silently dispatch with a different group size from the compiled kernel.
       auto& ep=compiler.get_entry_point(std::string(entry),model);
+      SpecializationConstant sx{},sy{},sz{};
+      compiler.get_work_group_size_specialization_constants(sx,sy,sz);
       Require(!ep.workgroup_size.id_x && !ep.workgroup_size.id_y && !ep.workgroup_size.id_z,
               "specialized workgroup size requires explicit lowering");
+      Require(!sx.id && !sy.id && !sz.id,"specialized builtin workgroup size requires explicit lowering");
       converted.workgroup_size={ep.workgroup_size.x,ep.workgroup_size.y,ep.workgroup_size.z};
+      if(ep.workgroup_size.constant) {
+        const auto& value=compiler.get_constant(ep.workgroup_size.constant);
+        Require(!value.specialization,"specialized builtin workgroup size requires explicit lowering");
+        for(uint32_t i=0;i<3;++i)converted.workgroup_size[i]=value.scalar(0,i);
+      }
       Require(converted.workgroup_size[0] && converted.workgroup_size[1] && converted.workgroup_size[2],
               "compute workgroup size is missing");
     }
@@ -200,6 +208,8 @@ bool BindConverted(const ConvertedShader& shader,std::span<const DescriptorResou
               "duplicate descriptor resources");
     for(const auto& r:shader.resources) {
       const auto& a=r.argument;
+      Require(a.alignment && (a.alignment&(a.alignment-1))==0,"invalid reflected argument alignment");
+      Require(a.kind<ArgumentKind::Count && a.count,"invalid reflected argument kind or count");
       if(r.source==ResourceSource::BufferSizes) {Require(!auxiliary,"duplicate auxiliary size buffer");auxiliary=&r;continue;}
       auto found=std::find_if(descriptors.begin(),descriptors.end(),[&](const DescriptorResources& d) {
         return d.source==r.source && (r.source==ResourceSource::PushConstants ||

@@ -14,6 +14,9 @@ Implemented:
 - Reflected pipeline bindings, separate constant/geometry storage, incremental
   surface reclamation, binary pipeline archives and completion-owned frames.
 - Direct SPIRV-Cross conversion with explicit descriptor-to-Metal mappings.
+- A native SDK shader subclass prepares and caches each actual microcode
+  modification directly as MSL, preserving the SDK's texture/sampler records.
+  Its translation objects are scoped to one stable backend feature profile.
 - ReXGlue constant-bank preparation using the actual SDK system struct and
   sparse constant maps. Unchanged banks reuse immutable buffers; pending frames
   retain old data when later draws change the constants.
@@ -29,6 +32,14 @@ contracts, their ASan/UBSan run, and 16 actual Metal GPU cases with 134 checks.
 The backend compiled for iOS ARM64 with deployment target 18.0. The downloaded
 report explicitly confirmed a GPU was available. That validation predates the
 shader-conversion additions; their new workflow must validate them separately.
+
+The next validated stage (`c428dce`, run `40207921955`) compiled all 96 supported
+SDK host kernels and 27 translator fixtures with Apple's iOS Metal compiler.
+Real GPU pixel checks passed for the SDK gamma pass and compute EDRAM clear,
+including reflected push constants and ordered storage reads. The 16 baseline
+GPU cases passed again. Native renderer, converter, constant and shared-memory
+adapter sources compiled for iOS ARM64. Shared-memory page-watch concurrency
+was not exercised by these GPU cases.
 
 Local shader validation converts 96 of 97 pinned SDK host shaders. The remaining
 `passthrough_position_xy_vs` uses vertex attributes; the backend currently uses
