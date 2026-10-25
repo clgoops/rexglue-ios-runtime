@@ -40,6 +40,14 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
   NativeCommandProcessor(gfx::GraphicsSystem* gs,system::KernelState* kernel,std::shared_ptr<NativeService> service)
     :CommandProcessor(gs,kernel),service_(std::move(service)) {}
   void IssueSwap(uint32_t,uint32_t width,uint32_t height) override;
+  void InitializeShaderStorage(const std::filesystem::path& root,uint32_t title,bool blocking) override {
+    CommandProcessor::InitializeShaderStorage(root,title,blocking);std::string error;
+    if(!service_->Drain(error)) {Fail(error);return;}
+    auto path=root/"native-metal"/std::to_string(title)/"pipelines.metalarc";
+    std::lock_guard lock(service_->mutex);
+    if(!service_->backend.ConfigureBinaryArchive(path.string(),error))REXLOG_WARN("Native Metal pipeline archive unavailable: {}",error);
+    else REXLOG_INFO("Native Metal pipeline archive: {}; Vulkan shader caches are separate",path.string());
+  }
   void ClearCaches() override {
     // EDRAM ownership and GPU shared memory must remain coherent with the guest.
     // Retire only after submitting and awaiting all outstanding native work.
@@ -109,6 +117,7 @@ bool NativeCommandProcessor::SetupContext() {
 }
 void NativeCommandProcessor::ShutdownContext() {
   std::string error;if(frame_&&!Flush(error))Fail(error);if(service_&&!service_->Drain(error))Fail(error);
+  if(service_) {std::lock_guard lock(service_->mutex);if(!service_->backend.SaveBinaryArchive(error))REXLOG_WARN("Could not save native Metal pipeline archive: {}",error);}
   primitives_.reset();textures_.reset();targets_.reset();shared_.reset();translator_.reset();shaders_.clear();CommandProcessor::ShutdownContext();
 }
 bool NativeCommandProcessor::Begin(std::string& error) {
@@ -121,7 +130,9 @@ bool NativeCommandProcessor::Begin(std::string& error) {
 bool NativeCommandProcessor::Flush(std::string& error) {
   if(!frame_)return !service_->failed;
   auto frame=std::move(frame_);auto completed=guest_completed_;auto submission=submission_;
+  gfx::PerformanceStats::Scope submit_time(service_->performance,gfx::PerformanceStats::Stage::kSubmit);
   bool accepted=service_->Submit(frame,error,[completed,submission]{completed->store(submission);});
+  if(accepted)service_->performance.RecordQueueSubmission();
   shared_->EndFrame(accepted);textures_->EndNativeFrame();primitives_->EndNativeFrame();
   // Keep texture LRU retirement bounded to completed guest work. Waiting is
   // avoided in the draw path; texture owner references protect pending packets.
@@ -160,6 +171,7 @@ bool NativeCommandProcessor::Resources(RexShader& source,const ConvertedShader&,
 bool NativeCommandProcessor::IssueDraw(gfx::xenos::PrimitiveType,uint32_t,IndexBufferInfo*,bool) {
   std::string error;auto& regs=*register_file_;if(regs.Get<gfx::reg::RB_MODECONTROL>().edram_mode==gfx::xenos::EdramMode::kCopy)return IssueCopy();
   if(service_->failed)return false;
+  gfx::PerformanceStats::Scope draw_time(service_->performance,gfx::PerformanceStats::Stage::kDraw);
   auto* vs=static_cast<RexShader*>(active_vertex_shader());if(!vs)return Fail("draw has no vertex shader");
   bool polygonal=gfx::draw_util::IsPrimitivePolygonal(regs),raster=gfx::draw_util::IsRasterizationPotentiallyDone(regs,polygonal);
   if(raster&&!regs.Get<gfx::reg::RB_SURFACE_INFO>().surface_pitch)return true;
@@ -223,6 +235,7 @@ bool NativeCommandProcessor::IssueDraw(gfx::xenos::PrimitiveType,uint32_t,IndexB
     draw.pipeline=pipeline.id;draw.bindings[0]=std::move(vertex_bindings);draw.bindings[1]=std::move(pixel_bindings);
     pass.mergeable=!memexport;pass.commands.push_back(std::move(draw));AppendPass(*frame_,std::move(pass));
   }
+  service_->performance.RecordDrawCall();
   if(memexport) {
     if(exports.empty())shared_->RangeWrittenByGpu(0,gfx::SharedMemory::kBufferSize);
     for(const auto& r:exports)shared_->RangeWrittenByGpu(r.base_address_dwords<<2,r.size_bytes);
@@ -245,6 +258,8 @@ bool NativeCommandProcessor::Readback(uint32_t address,uint32_t length,std::stri
   return true;
 }
 bool NativeCommandProcessor::IssueCopy() {
+  gfx::PerformanceStats::Scope resolve_time(service_->performance,gfx::PerformanceStats::Stage::kResolve);
+  service_->performance.RecordResolveCall();
   std::string error;if(!Begin(error))return Fail(error);uint32_t address=0,length=0;
   if(!targets_->Resolve(*frame_,*memory_,*shared_,*textures_,address,length,error))return Fail(error);
   if(length&&GetReadbackResolveMode(false)!=gfx::ReadbackResolveMode::kDisabled&&!Readback(address,length,error))return Fail(error);

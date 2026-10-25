@@ -21,6 +21,7 @@ class NativeService:public std::enable_shared_from_this<NativeService> {
   void Fail(const std::string&);
   std::mutex mutex;
   MetalBackend backend;
+  graphics::PerformanceStats performance;
   std::atomic<uint64_t> completed{0};
   std::atomic<bool> failed{false};
  private:
@@ -41,6 +42,8 @@ class NativeUIContext:public ui::UIDrawContext {
 class NativeGraphicsSystem final:public graphics::GraphicsSystem {
  public:
   std::string name() const override {return "Xenos native Metal";}
+  void SetPerformanceMonitoringEnabled(bool) override;
+  graphics::PerformanceMetrics GetPerformanceMetrics() const override;
  protected:
   void CreateProvider(bool with_presentation) override;
   std::unique_ptr<graphics::CommandProcessor> CreateCommandProcessor() override;

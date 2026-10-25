@@ -47,6 +47,7 @@ class MetalBackend {
   std::vector<std::byte> ReadRGBA8(const SurfaceView&,std::string& error);
   BackendStats Stats() const;
   Capabilities GetDeviceCapabilities() const;
+  void SetTimingEnabled(bool enabled);
   std::vector<std::byte> ReadBuffer(const BufferView&,std::string& error);
   // Opaque CAMetalLayer owned by the UIKit host, passed without API types into
   // the frame contract. Null disables presentation. The layer and backend use

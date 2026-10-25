@@ -147,7 +147,8 @@ void NativeService::Fail(const std::string& error) {if(!failed.exchange(true))RE
 bool NativeService::Submit(std::shared_ptr<Frame> frame,std::string& error,std::function<void()> completed_callback) {
   std::lock_guard lock(mutex);if(failed) {error="native Metal session has failed";return false;}frame->sequence=++sequence_;
   auto weak=weak_from_this();return backend.Submit(std::move(frame),[weak,done=std::move(completed_callback)](Completion result) {
-    if(auto self=weak.lock()) {if(!result.success)self->Fail(result.error);self->completed.store(result.sequence);}
+    if(auto self=weak.lock()) {if(!result.success)self->Fail(result.error);self->completed.store(result.sequence);
+      if(done&&result.timing_available) {self->performance.SetGpuTimingSupported(true);self->performance.RecordGpuSubmission(uint64_t(result.native_window_ms*1e6));}}
     if(result.success&&done)done();
   },error);
 }
@@ -159,4 +160,8 @@ void NativeGraphicsSystem::CreateProvider(bool presentation) {
   provider_=CreateNativeProvider(service_);provider_supports_presentation_=presentation;
 }
 std::unique_ptr<graphics::CommandProcessor> NativeGraphicsSystem::CreateCommandProcessor() {return CreateNativeCommandProcessor(this,kernel_state_,service_);}
+void NativeGraphicsSystem::SetPerformanceMonitoringEnabled(bool enabled) {
+  if(!service_)return;std::lock_guard lock(service_->mutex);service_->performance.SetEnabled(enabled);service_->backend.SetTimingEnabled(enabled);
+}
+graphics::PerformanceMetrics NativeGraphicsSystem::GetPerformanceMetrics() const {return service_?service_->performance.GetMetrics():graphics::PerformanceMetrics{};}
 } // namespace rex::native
