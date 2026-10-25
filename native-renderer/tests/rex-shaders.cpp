@@ -8,6 +8,8 @@
 #include <rex/graphics/pipeline/shader/spirv.h>
 #include <rex/graphics/util/draw.h>
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>

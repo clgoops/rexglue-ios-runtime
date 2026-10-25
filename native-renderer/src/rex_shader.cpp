@@ -8,7 +8,7 @@ graphics::Shader::Translation* RexShader::CreateTranslationInstance(uint64_t mod
 bool RexShader::NativeTranslation::Prepare(graphics::SpirvShaderTranslator& translator,
     const std::function<Identity()>& next_id,std::string& error) {
   error.clear();std::lock_guard lock(preparation_mutex_);
-  if(converted_.load())return true;
+  if(converted_)return true;
   if(!shader().is_ucode_analyzed()) {error="native shader must be analyzed before preparation";return false;}
   if(!is_translated() && !translator.TranslateAnalyzedShader(*this)) {
     error="ReXGlue microcode translation failed";return false;
@@ -28,6 +28,6 @@ bool RexShader::NativeTranslation::Prepare(graphics::SpirvShaderTranslator& tran
   std::vector<uint32_t> words(binary.size()/4);memcpy(words.data(),binary.data(),binary.size());
   ConvertedShader result;
   if(!ConvertSpirv(words,next_id(),stage,"main",result,error))return false;
-  converted_.store(std::make_shared<const ConvertedShader>(std::move(result)));return true;
+  converted_=std::make_shared<const ConvertedShader>(std::move(result));return true;
 }
 } // namespace rex::native

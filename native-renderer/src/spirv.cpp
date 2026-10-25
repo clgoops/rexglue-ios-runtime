@@ -80,9 +80,10 @@ bool ConvertSpirv(std::span<const uint32_t> words,Identity id,Stage stage,std::s
     msl.enable_decoration_binding=false;
     msl.buffer_size_buffer_index=options.buffer_size_slot;
     msl.ios_support_base_vertex_instance=true;
-    // The working renderer depends on full precision; do not enable unsafe
-    // algebraic rewrites or the previous lighting-breaking precision changes.
-    msl.invariant_float_math=true;
+    // Keep the translator's per-operation NoContraction rules and compile with
+    // fast math disabled. Global invariance would additionally force unoptimized
+    // arithmetic helpers even for ordinary host gamma/texture conversion math.
+    msl.invariant_float_math=false;
     compiler.set_msl_options(msl);
     std::vector<Pending> pending;
     auto add=[&](const auto& list,ArgumentKind kind,bool storage=false,ResourceSource source=ResourceSource::Descriptor) {
