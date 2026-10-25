@@ -101,7 +101,7 @@ int main(){@autoreleasepool {
     f.commands.push_back(BufferToTexture{{Id(501),16,1280},View(1),80,0,0,0,16,16});
     Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{0,255,0,255});
     auto read=backend.ReadBuffer({Id(501),16,4},failure);Check(read.size()==4);uint32_t word;std::memcpy(&word,read.data(),4);Check(word==0xff00ff00u);
-    Check(backend.DeviceCapabilities().max_buffer_length>=256ull*1024*1024);
+    Check(backend.GetDeviceCapabilities().max_buffer_length>=256ull*1024*1024);
     Done("GPU conversion buffer becomes a texture with explicit row pitch and offset");
   }
   {

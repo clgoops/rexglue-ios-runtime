@@ -18,7 +18,7 @@ jobs:
           git -C spirv-cross-src checkout adec7acbf41a988713cdb85f93f26c8ca5ea863e
           git clone --no-checkout https://github.com/rexglue/rexglue-sdk.git sdk
           git -C sdk checkout c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
-          git -C sdk submodule update --init --depth 1 --jobs 3 thirdparty/fmt thirdparty/glslang thirdparty/vulkan-headers thirdparty/xxHash thirdparty/spirv-tools thirdparty/spirv-headers
+          git -C sdk submodule update --init --depth 1 --jobs 3 thirdparty/fmt thirdparty/glslang thirdparty/vulkan-headers thirdparty/xxHash thirdparty/spirv-tools thirdparty/spirv-headers thirdparty/simde thirdparty/spdlog
       - name: Build native frame and Metal backend on Mac
         run: |
           set -euo pipefail

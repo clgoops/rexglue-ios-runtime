@@ -1,0 +1,64 @@
+name: Build native Metal game runtime
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit generic source package
+        run: python3 tools/audit-inputs.py
+      - name: Fetch pinned open-source dependencies
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/rexglue/rexglue-sdk.git sdk
+          git -C sdk checkout c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
+          git -C sdk submodule update --init --recursive --depth 1 --jobs 4
+          for patch in runtime-patches/*.patch; do git -C sdk apply "$GITHUB_WORKSPACE/$patch"; done
+          git clone --no-checkout https://github.com/KhronosGroup/SPIRV-Cross.git spirv-cross-src
+          git -C spirv-cross-src checkout adec7acbf41a988713cdb85f93f26c8ca5ea863e
+          python3 tools/connect-native-sdk.py sdk
+      - name: Configure native Metal iOS runtime
+        run: |
+          set -euo pipefail
+          cmake -S sdk -B runtime-build -G Ninja \
+            -DREXSDK_DIR="$GITHUB_WORKSPACE/sdk" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_SYSTEM_PROCESSOR=arm64 -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_ENABLE_PERF_COUNTERS=OFF \
+            -DREXGLUE_USE_D3D12=OFF -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_BUILD_TESTS=OFF 2>&1 | tee configure.log
+      - name: Build runtime and native game plugin
+        run: |
+          set -euo pipefail
+          cmake --build runtime-build --target rexgpu-xenos MoltenVK --parallel 3 2>&1 | tee build.log
+      - name: Collect generic runtime libraries and verify native selection
+        run: |
+          set -euo pipefail
+          python3 tools/collect-runtime.py sdk runtime-build runtime-artifact
+          cp spirv-cross-src/LICENSE runtime-artifact/Acknowledgements/SPIRV-Cross-LICENSE
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          p=Path('runtime-artifact')
+          data=(p/'librexgpu-xenos.dylib').read_bytes()
+          assert b'Native Metal guest GPU active:' in data
+          assert b'selecting native Metal backend' in data
+          path=p/'BUILD-MANIFEST.json'
+          m=json.loads(path.read_text());m['game_backend']='native-metal';m['vulkan_fallback']=False
+          path.write_text(json.dumps(m,indent=2)+'\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-metal-game-runtime
+          retention-days: 1
+          path: |
+            runtime-artifact/
+            configure.log
+            build.log

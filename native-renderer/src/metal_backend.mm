@@ -731,7 +731,7 @@ bool MetalBackend::SaveBinaryArchive(std::string& error){
      ![impl_->archive serializeToURL:impl_->archive_url error:&failure]){error=DescribeError(failure);return false;}
   impl_->archive_dirty=false;return true;
 }
-Capabilities MetalBackend::DeviceCapabilities() const {
+Capabilities MetalBackend::GetDeviceCapabilities() const {
   Capabilities c;c.max_buffer_length=impl_->device.maxBufferLength;
   c.float32_filtering=impl_->device.supports32BitFloatFiltering;
 #if TARGET_OS_IPHONE
