@@ -4,7 +4,7 @@ import hashlib, json, shutil, struct, subprocess, sys
 sdk, build, output = [Path(p).resolve() for p in sys.argv[1:4]]
 output.mkdir(exist_ok=False)
 records = []
-for name in ('librexruntime.dylib', 'librexgpu-xenos.dylib'):
+for name in ('librexruntime.dylib', 'librexgpu-xenos.dylib', 'libMoltenVK.dylib'):
     # The pinned SDK sets its shared-library output beneath the source tree.
     matches = sorted({p.resolve() for root in (build, sdk / 'out' / 'mac-arm64')
                       for p in root.rglob(name)})

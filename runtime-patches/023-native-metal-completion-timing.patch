@@ -1,0 +1,155 @@
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -80,6 +80,7 @@
+ REXCVAR_DECLARE(bool, vulkan_dynamic_rendering);
+ REXCVAR_DECLARE(bool, vulkan_tight_render_area);
+ REXCVAR_DECLARE(bool, vulkan_pass_timing);
++REXCVAR_DECLARE(bool, vulkan_native_metal_timing);
+ REXCVAR_DECLARE(bool, vulkan_optimize_registers);
+ REXCVAR_DECLARE(bool, vulkan_async_skip_incomplete_frames);
+ REXCVAR_DECLARE(int32_t, vulkan_pipeline_creation_threads);
+diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
+--- a/src/graphics/flags.cpp
++++ b/src/graphics/flags.cpp
+@@ -14,6 +14,9 @@
+ #include <rex/ui/renderdoc_api.h>
+ 
+ // Diagnostic build: the existing performance toggle gates sparse pass samples.
++REXCVAR_DEFINE_BOOL(vulkan_native_metal_timing, true, "GPU", "Diagnostic: label native Metal submissions and disable Vulkan timestamp probes.")
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++
+ REXCVAR_DEFINE_BOOL(vulkan_pass_timing, false, "GPU", "Record bounded rotating GPU pass timing samples while performance metrics are enabled.");
+ 
+ REXCVAR_DEFINE_BOOL(vulkan_optimize_registers, true, "GPU", "Canonicalize function-local SPIR-V registers before Metal translation, with validation fallback.");
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -5455,11 +5455,22 @@
+     command_buffer_begin_info.pNext = nullptr;
+     command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+     command_buffer_begin_info.pInheritanceInfo = nullptr;
++    const bool native_metal_timing = REXCVAR_GET(vulkan_native_metal_timing);
++    const bool query_timing = performance_stats_->enabled() && !native_metal_timing;
++    const std::string timing_label = native_metal_timing && performance_stats_->enabled()
++        ? fmt::format("rex.native.frame-{}.sub-{}",frame_current_,GetCurrentSubmission())
++        : "rex.gpu";
++    vulkan_device->SetObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,command_buffer.buffer,timing_label.c_str());
+     if (dfn.vkBeginCommandBuffer(command_buffer.buffer, &command_buffer_begin_info) != VK_SUCCESS) {
+       REXGPU_ERROR("Failed to begin a Vulkan command buffer");
+       return false;
+     }
+-    if (performance_stats_->enabled() && !timing_initialized_) {
++    if (native_metal_timing && !timing_initialized_) {
++      timing_initialized_=true;
++      performance_stats_->SetGpuTimingSupported(false);
++      REXGPU_INFO("Native Metal timing: completion-window logging selected; Vulkan timestamp probes disabled; GPU overlay spans unavailable");
++    }
++    if (query_timing && !timing_initialized_) {
+       timing_initialized_=true;
+       const auto& ifn=vulkan_device->vulkan_instance()->functions();
+       VkPhysicalDeviceProperties properties;
+@@ -5474,7 +5485,7 @@
+       performance_stats_->SetGpuTimingSupported(timestamp_valid_bits_>0 && timestamp_period_>0);
+       REXGPU_INFO("Performance timestamps: valid_bits={} period_ns={}",timestamp_valid_bits_,timestamp_period_);
+     }
+-    if (performance_stats_->enabled() && timestamp_valid_bits_ && timestamp_period_>0 && !command_buffer.timing_pool) {
++    if (query_timing && timestamp_valid_bits_ && timestamp_period_>0 && !command_buffer.timing_pool) {
+       VkQueryPoolCreateInfo info={};info.sType=VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+       info.queryType=VK_QUERY_TYPE_TIMESTAMP;info.queryCount=2;
+       if(dfn.vkCreateQueryPool(device,&info,nullptr,&command_buffer.timing_pool)!=VK_SUCCESS) {
+@@ -5485,7 +5496,7 @@
+       // Keep ownership in the writable list even if recording/submission fails.
+       command_buffers_writable_.back().timing_pool=command_buffer.timing_pool;
+     }
+-    command_buffer.timing_recorded=performance_stats_->enabled() && timestamp_valid_bits_ && command_buffer.timing_pool;
++    command_buffer.timing_recorded=query_timing && timestamp_valid_bits_ && command_buffer.timing_pool;
+     if(command_buffer.timing_recorded) {
+       dfn.vkCmdResetQueryPool(command_buffer.buffer,command_buffer.timing_pool,0,2);
+       dfn.vkCmdWriteTimestamp(command_buffer.buffer,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,command_buffer.timing_pool,0);
+@@ -5496,7 +5507,7 @@
+       performance_stats_->RecordRenderAreas(areas.passes,areas.reduced_passes,areas.original_pixels,areas.used_pixels);
+       const VkQueryPool pass_pool = command_buffer.pass_profile.pool;
+       command_buffer.pass_profile = {}; command_buffer.pass_profile.pool = pass_pool;
+-      if (REXCVAR_GET(vulkan_pass_timing) && performance_stats_->enabled() &&
++      if (!native_metal_timing && REXCVAR_GET(vulkan_pass_timing) && performance_stats_->enabled() &&
+           timestamp_valid_bits_ && timestamp_period_ > 0 && pass_profile_available_ && areas.passes >= 16 &&
+           (pass_profile_attempt_++ % 4) == 0) {
+         auto profile = deferred_command_buffer_.BuildPassProfile(pass_profile_serial_++);
+diff --git a/thirdparty/moltenvk/MoltenVK/MoltenVK/Utility/REXNativeMetalTiming.h b/thirdparty/moltenvk/MoltenVK/MoltenVK/Utility/REXNativeMetalTiming.h
+new file mode 100644
+--- /dev/null
++++ b/thirdparty/moltenvk/MoltenVK/MoltenVK/Utility/REXNativeMetalTiming.h
+@@ -0,0 +1,24 @@
++// SPDX-License-Identifier: Apache-2.0
++// Native command-buffer windows; this does not measure shader busy cycles.
++#pragma once
++#include <cmath>
++struct REXNativeMetalWindow {
++  bool valid_gpu=false;
++  double gpu_ms=-1, pre_gpu_ms=-1, driver_ms=-1, callback_lag_ms=-1;
++};
++inline REXNativeMetalWindow rexNativeMetalWindow(bool completed,double committed,
++    double gpu_start,double gpu_end,double kernel_start,double kernel_end,double callback) {
++  REXNativeMetalWindow result;
++  result.valid_gpu=completed && std::isfinite(gpu_start) && std::isfinite(gpu_end) &&
++                   gpu_start>0 && gpu_end>=gpu_start;
++  if(result.valid_gpu) {
++    result.gpu_ms=(gpu_end-gpu_start)*1000.0;
++    if(std::isfinite(committed) && committed>0 && gpu_start>=committed)
++      result.pre_gpu_ms=(gpu_start-committed)*1000.0;
++    if(std::isfinite(callback) && callback>=gpu_end)
++      result.callback_lag_ms=(callback-gpu_end)*1000.0;
++  }
++  if(std::isfinite(kernel_start) && std::isfinite(kernel_end) && kernel_start>0 && kernel_end>=kernel_start)
++    result.driver_ms=(kernel_end-kernel_start)*1000.0;
++  return result;
++}
+diff --git a/thirdparty/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm b/thirdparty/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+--- a/thirdparty/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
++++ b/thirdparty/moltenvk/MoltenVK/MoltenVK/GPUObjects/MVKQueue.mm
+@@ -24,6 +24,7 @@
+ #include "MVKFoundation.h"
+ #include "MVKOSExtensions.h"
+ #include "MVKGPUCapture.h"
++#include "REXNativeMetalTiming.h"
+ 
+ using namespace std;
+ 
+@@ -506,6 +507,24 @@
+ 	[_activeMTLCommandBuffer enqueue];
+ }
+ 
++// Called before finish() destroys the submission. Only tagged guest buffers
++// are reported. This uses completed Metal properties, not counter samples,
++// synchronous waits, performanceTracking, or a change to semaphore handling.
++static void rexLogNativeMetalTiming(MVKBaseObject* owner,id<MTLCommandBuffer> buffer,
++                                    double committed) {
++  NSString* label=buffer.label;
++  if(![label hasPrefix:@"rex.native."]) return;
++  const double start=buffer.GPUStartTime,end=buffer.GPUEndTime;
++  const double kernel_start=buffer.kernelStartTime,kernel_end=buffer.kernelEndTime;
++  const double callback=double(mvkGetRuntimeNanoseconds())*1e-9;
++  const auto window=rexNativeMetalWindow(buffer.status==MTLCommandBufferStatusCompleted,
++      committed,start,end,kernel_start,kernel_end,callback);
++  owner->reportMessage(MVK_CONFIG_LOG_LEVEL_INFO,
++      "Native Metal window: label=%s valid=%d gpu_ms=%.6f pre_gpu_ms=%.6f driver_ms=%.6f callback_lag_ms=%.6f commit_s=%.9f gpu_start_s=%.9f gpu_end_s=%.9f callback_s=%.9f status=%ld",
++      label.UTF8String,int(window.valid_gpu),window.gpu_ms,window.pre_gpu_ms,window.driver_ms,
++      window.callback_lag_ms,committed,start,end,callback,long(buffer.status));
++}
++
+ // Commits and releases the currently active MTLCommandBuffer, optionally signalling
+ // when the MTLCommandBuffer is done. The first time this is called, it will wait on
+ // any semaphores. We have delayed signalling the semaphores as long as possible to
+@@ -546,8 +565,11 @@
+ 	_activeMTLCommandBuffer = nil;
+ 
+ 	uint64_t startTime = getPerformanceTimestamp();
++    const bool nativeTrace=[mtlCmdBuff.label hasPrefix:@"rex.native."];
++    const double nativeCommit=nativeTrace ? double(mvkGetRuntimeNanoseconds())*1e-9 : 0.0;
+ 	[mtlCmdBuff addCompletedHandler: ^(id<MTLCommandBuffer> mtlCB) {
+ 		addPerformanceInterval(getPerformanceStats().queue.mtlCommandBufferExecution, startTime);
++        if(nativeTrace) rexLogNativeMetalTiming(this,mtlCB,nativeCommit);
+ 		if (signalCompletion) { this->finish(); }	// Must be the last thing the completetion callback does.
+ 	}];
+ 

@@ -12,9 +12,27 @@ device logs, credentials or signing material. It cannot build a complete game.
 The workflow fetches SDK c94f5ebdcb3c9d1a460ca48e04f9758448f8d518 and its
 pinned submodules, applies the reviewed patches, runs the focused renderer
 tests, compiles those tests for iOS ARM64, and builds rexgpu-xenos plus its
-runtime dependency. Artifacts contain the two runtime libraries, license
+runtime dependency. Artifacts contain the two runtime libraries, the diagnostic MoltenVK driver, license
 notices and checksums. They are retained for one day. Device signing and game
 packaging happen separately on the owner's Windows machine.
+
+The current diagnostic additionally builds the pinned MoltenVK driver with
+completion-window reporting for command buffers labeled `rex.native.*`. It reads
+GPUStartTime/GPUEndTime and CPU scheduling properties in the existing completion
+handler, before submission destruction. No extra GPU counter commands or waits
+are introduced. Native mode disables both Vulkan submission timestamps and sparse
+pass queries while keeping FPS/CPU metrics. GPU span fields in the old overlay
+are unavailable in this mode; native windows appear in the exported log.
+
+The log identifies each guest frame/submission, execution window, pre-GPU interval,
+driver scheduling interval and completion-callback lag. An execution window may
+include intra-buffer stalls; it is not a shader-busy-cycle counter. Unknown/failed
+timestamps are marked invalid instead of reporting a false zero. CPU-only tests
+run the actual reporting function with captured Metal properties; they do not
+prove GPU behavior or a speedup. Test targets also compile for iOS ARM64.
+
+MoltenVK source modifications retain Apache-2.0 licensing and upstream notices.
+Existing performanceTracking settings and renderer algorithms are unchanged.
 
 The current runtime adds local SPIR-V register canonicalization before shader
 module creation: scalar replacement, local access conversion, load/store

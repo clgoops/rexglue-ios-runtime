@@ -2,7 +2,7 @@
   "sdk_commit": "c94f5ebdcb3c9d1a460ca48e04f9758448f8d518",
   "files": {
     ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    ".github/workflows/runtime-ios.yml": "61d746b7c7d1629981d0d09cfb7d3d293237494d484c3cfeca1688772dcc54c8",
+    ".github/workflows/runtime-ios.yml": "6d9a98c9e0b39a24fb9a0f169633d3028b53e019d3195d4e94a6b55deced3aeb",
     ".gitignore": "592189dacca5b0436eb31299777762de349938249279d257be7ae1eb4a99ae79",
     "LICENSE": "8e065be1da2ff9a16b1f063d4636d8b67e6a654bb90583ea4332e66ac421bb18",
     "optimizer-tests/CMakeLists.txt": "24c7643beab9a54f106fd8874a146876233feec370c0c8f75a5b983c8e0e96c6",
@@ -11,7 +11,7 @@
     "optimizer-tests/stubs/rex/logging.h": "c99bd6906e0d66bfd80f035a4f96efe8add14ced73090343071da5d8b7d301ba",
     "optimizer-tests/tests.cpp": "ff06ec822deb617b3d9a8b17239aa7c967763e2b78f885623eecf41e3e6801d8",
     "optimizer-tests/translator-tests.cpp": "7a94adf9d4cf25e657d1c19a7c9e0c4dd55d9e13815643f0ee37ea587d83d378",
-    "README.md": "58d6f3076163694773f028a6ecfdd4cbb2fae8a8b2c3253c40fa14aa46e4f0b9",
+    "README.md": "0753d8583424f95fa542219560a2fe3d3c30a90023d0b7f078e59a40e337abe2",
     "runtime-patches/001-vulkan-loader-empty-processor.patch": "6c13cad89acf1065920a25ece53201c07b0c6f1faea627a737f48d52bb2325c0",
     "runtime-patches/002-moltenvk-ios-frameworks.patch": "3b00b25997433690431bb393e5a5feb5bc61708720b08ad88ff64a95d4f8ce50",
     "runtime-patches/003-ios-sdl-entry-and-video.patch": "db9f90faa174aa5a37b610aa2a34fd3c11e7df5529361197bb21402539165dfa",
@@ -34,11 +34,14 @@
     "runtime-patches/020-vulkan-sampled-pass-profile.patch": "629bc97a159943cd1a6fcaefb30e3be8d8f915663b2c7cf36652214af29b39a2",
     "runtime-patches/021-vulkan-register-optimization.patch": "7338755bbbaca00c6e32febaf7c2678b6c28cfeaa8ae8e51db17476738e10387",
     "runtime-patches/022-vulkan-register-layout-validation.patch": "46a90a3ef3d9fed16ef3b8ad5b951be9822955447d9f5133703fef82dde137f5",
+    "runtime-patches/023-native-metal-completion-timing.patch": "685747d1d11602413ac05e141cb23f463cf7f532646388c98b4f999e6e6f6335",
+    "tests/check-native-metal.py": "6194f0ba0544d0e978fadc781158e3b34aa89ca9055a06580d9959ae495ee019",
     "tests/check-pass-profile.py": "b8308d402b515f64ec728cedcbe1a489b96ed8c1cdb9f99aaedcdc7682289dfc",
     "tests/check-render-areas.py": "affdd7f40ccb47811c5e4d8efd52796fd11e59d55c6c26368b20da878b9d0a4c",
     "tests/check-render-timing.py": "761a7f6d067f0bd6de6c068c559dd2fb4239cd3cbd9ffa0eb131116f96256d90",
+    "tests/native-metal-window.cpp": "ec0912bd517f2c9b80f843c3981e53427e15601ab35cc2b5c42605696870d6f0",
     "tests/transfer-scissor.cpp": "2aae45c40503d4c812415870035182a091daa5d1c92512646e271d04d972cab2",
     "tools/audit-inputs.py": "25f47b9c33be086ba577c9640a8be18b20ffd8ab3346b7511221df7048848dab",
-    "tools/collect-runtime.py": "0223a9f828f280ffb3e5acbc06c1a6d52dfbd4ded5e715620484c1e893050b01"
+    "tools/collect-runtime.py": "aebadceb3658854cb9a0c0fe8cde9a3a628c3ed108c9c002498a876646dc3bf7"
   }
 }

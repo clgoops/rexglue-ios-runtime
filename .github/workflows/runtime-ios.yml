@@ -41,6 +41,17 @@ jobs:
           for test in tests/transfer-scissor.cpp render-area-tests.cpp pass-profile-tests.cpp render-timing-tests.cpp; do
             xcrun --sdk iphoneos clang++ -std=c++23 -O2 -arch arm64 -miphoneos-version-min=18.0 -Isdk/include -Isdk/thirdparty/vulkan-headers/include -c "$test" -o "$(basename "$test").ios.o"
           done
+      - name: Check native Metal completion-window reporting
+        run: |
+          set -euo pipefail
+          native_include=sdk/thirdparty/moltenvk/MoltenVK/MoltenVK/Utility
+          xcrun clang++ -std=c++23 -O2 -I"$native_include" tests/native-metal-window.cpp -o native-window-tests
+          ./native-window-tests | tee native-window-tests.log
+          python3 tests/check-native-metal.py sdk native-metal-log-tests.mm
+          xcrun clang++ -std=c++23 -O2 -fobjc-arc -I"$native_include" -framework Foundation -framework Metal native-metal-log-tests.mm -o native-metal-log-tests
+          ./native-metal-log-tests | tee native-metal-log-tests.log
+          xcrun --sdk iphoneos clang++ -std=c++23 -O2 -arch arm64 -miphoneos-version-min=18.0 -I"$native_include" -c tests/native-metal-window.cpp -o native-window-tests.ios.o
+          xcrun --sdk iphoneos clang++ -std=c++23 -O2 -fobjc-arc -arch arm64 -miphoneos-version-min=18.0 -I"$native_include" -c native-metal-log-tests.mm -o native-metal-log-tests.ios.o
       - name: Configure iOS runtime
         run: |
           set -euo pipefail
@@ -57,7 +68,7 @@ jobs:
       - name: Build runtime and graphics library
         run: |
           set -euo pipefail
-          cmake --build runtime-build --target rexgpu-xenos register-opt-tests register-translator-tests --parallel 3 2>&1 | tee build.log
+          cmake --build runtime-build --target rexgpu-xenos MoltenVK register-opt-tests register-translator-tests --parallel 3 2>&1 | tee build.log
       - name: Validate register optimizer and shader-module fallback on Mac
         run: |
           set -euo pipefail
@@ -84,3 +95,5 @@ jobs:
             optimizer-build.log
             optimizer-tests.log
             translator-tests.log
+            native-window-tests.log
+            native-metal-log-tests.log
