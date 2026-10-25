@@ -11,6 +11,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Audit generic source package
         run: python3 tools/audit-inputs.py
+      - name: Compile actual display and touch shaders before building runtime
+        run: |
+          set -euo pipefail
+          if ! xcrun --find metal; then xcodebuild -downloadComponent MetalToolchain; fi
+          python3 native-renderer/tools/export-live-shaders.py production-msl
+          for source in production-msl/*.metal; do
+            xcrun --sdk iphoneos metal -std=ios-metal2.3 -fno-fast-math -mios-version-min=18.0 -c "$source" -o "${source%.metal}.air"
+          done
       - name: Fetch pinned open-source dependencies
         run: |
           set -euo pipefail

@@ -25,12 +25,12 @@ vertex float4 swap_vertex(uint i [[vertex_id]]) {
 constexpr const char* kSwapFragment=R"(#include <metal_stdlib>
 using namespace metal;
 struct Gamma {uint table[256];uint pwl[384];uint swizzle;uint use_pwl;uint2 padding;};
-float component(float4 value,uint i) {return i<4?value[i]:(i==5?1.0:0.0);}
+float select_channel(float4 value,uint i) {return i<4?value[i]:(i==5?1.0:0.0);}
 float pwl_channel(constant Gamma& g,uint value,uint c) {
  uint p=g.pwl[(value>>3)*3+c];return clamp((float(p&65535u)+float((value&7u)*(p>>16))*0.125)*1.52737048e-5,0.0,1.0);
 }
 fragment float4 swap_fragment(float4 pos [[position]],texture2d_array<float,access::read> image [[texture(0)]],constant Gamma& g [[buffer(0)]]) {
- float4 raw=image.read(uint2(pos.xy),0);float3 color=float3(component(raw,g.swizzle&7u),component(raw,(g.swizzle>>3)&7u),component(raw,(g.swizzle>>6)&7u));
+ float4 raw=image.read(uint2(pos.xy),0);float3 color=float3(select_channel(raw,g.swizzle&7u),select_channel(raw,(g.swizzle>>3)&7u),select_channel(raw,(g.swizzle>>6)&7u));
  color=clamp(color,0.0,1.0);
  if(g.use_pwl) {uint3 v=uint3(color*1023.0+0.5);return float4(pwl_channel(g,v.r,0),pwl_channel(g,v.g,1),pwl_channel(g,v.b,2),1);}
  uint3 v=uint3(color*255.0+0.5);return float4(float((g.table[v.r]>>20)&1023u),float((g.table[v.g]>>10)&1023u),float(g.table[v.b]&1023u),1023.0)/1023.0;
