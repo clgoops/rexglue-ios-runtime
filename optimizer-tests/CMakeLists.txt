@@ -42,7 +42,7 @@ add_executable(register-translator-tests translator-tests.cpp
   "${SDK}/thirdparty/glslang/SPIRV/SpvPostProcess.cpp"
   "${SDK}/thirdparty/glslang/SPIRV/InReadableOrder.cpp"
   "${SDK}/thirdparty/glslang/SPIRV/Logger.cpp")
-target_include_directories(register-translator-tests PRIVATE stubs "${SDK}/include"
+target_include_directories(register-translator-tests BEFORE PRIVATE stubs "${SDK}/include"
   "${SDK}/thirdparty/fmt/include" "${SDK}/thirdparty/glslang"
   "${SDK}/thirdparty/spirv-tools/include" "${SDK}/thirdparty/spirv-headers/include"
   "${SDK}/thirdparty/vulkan-headers/include" "${SDK}/thirdparty/xxhash"

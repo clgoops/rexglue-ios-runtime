@@ -5,7 +5,7 @@
     ".github/workflows/runtime-ios.yml": "61d746b7c7d1629981d0d09cfb7d3d293237494d484c3cfeca1688772dcc54c8",
     ".gitignore": "592189dacca5b0436eb31299777762de349938249279d257be7ae1eb4a99ae79",
     "LICENSE": "8e065be1da2ff9a16b1f063d4636d8b67e6a654bb90583ea4332e66ac421bb18",
-    "optimizer-tests/CMakeLists.txt": "37e53b77cac9cab003409e0643870ae7cc30f5bdbb2c6b72a817ea22a988d3f0",
+    "optimizer-tests/CMakeLists.txt": "24c7643beab9a54f106fd8874a146876233feec370c0c8f75a5b983c8e0e96c6",
     "optimizer-tests/extract-module.py": "3d5025c67c103499478e8e3cae274c55fbb26f93a1694bf2d1d4865b37d20784",
     "optimizer-tests/stubs/rex/graphics/flags.h": "9a2c14524499a23d05d9f56fc1071b9bfff8f08cfe5e728820e60ac521977af5",
     "optimizer-tests/stubs/rex/logging.h": "c99bd6906e0d66bfd80f035a4f96efe8add14ced73090343071da5d8b7d301ba",
