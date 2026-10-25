@@ -41,6 +41,15 @@ GPU cases passed again. Native renderer, converter, constant and shared-memory
 adapter sources compiled for iOS ARM64. Shared-memory page-watch concurrency
 was not exercised by these GPU cases.
 
+The shader adapter stage (`850df3d`, run `40209298630`) also passed on actual
+Metal hardware: synthetic Xbox microcode was translated by the real SDK, prepared
+through `RexShader`, bound through `RexConstantState`, and rendered to two targets
+with distinct expected colors while both immutable frame snapshots remained
+alive. The 334 translator/constant checks, 32 shader-binding checks, 57 frame
+contracts, sanitizer checks, all 96 supported iOS shader compilations and the
+prior GPU cases passed. The actual shader adapter compiled for iOS ARM64 too.
+These fixtures do not establish Blur frame fidelity or performance.
+
 Local shader validation converts 96 of 97 pinned SDK host shaders. The remaining
 `passthrough_position_xy_vs` uses vertex attributes; the backend currently uses
 buffer-pulled vertices. The same local check converts 27 actual ReXGlue translator
