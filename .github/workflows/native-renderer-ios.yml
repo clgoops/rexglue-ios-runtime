@@ -11,6 +11,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Audit reviewed source inputs
         run: python3 tools/audit-inputs.py
+      - name: Preflight native Metal resource and pixel ordering
+        run: |
+          set -euo pipefail
+          cmake -S native-renderer -B native-preflight -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build native-preflight --target native-metal-tests --parallel 3
+          set +e
+          MTL_DEBUG_LAYER=1 ./native-preflight/native-metal-tests 2>&1 | tee native-metal-tests.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" = 77 ]; then
+            python3 -c 'import json;json.dump({"gpu_available":False,"pixel_validation":"unavailable; no hardware result claimed"},open("gpu-result.json","w"))'
+          elif [ "$status" = 0 ]; then
+            python3 -c 'import json;json.dump({"gpu_available":True,"pixel_validation":"passed"},open("gpu-result.json","w"))'
+          else
+            exit "$status"
+          fi
       - name: Fetch pinned shader translator dependencies
         run: |
           set -euo pipefail
@@ -44,15 +59,6 @@ jobs:
       - name: Run native Metal pixel cases when the runner exposes a GPU
         run: |
           set -uo pipefail
-          MTL_DEBUG_LAYER=1 ./native-host/native-metal-tests 2>&1 | tee native-metal-tests.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" = 77 ]; then
-            python3 -c 'import json;json.dump({"gpu_available":False,"pixel_validation":"unavailable; no hardware result claimed"},open("gpu-result.json","w"))'
-          elif [ "$status" = 0 ]; then
-            python3 -c 'import json;json.dump({"gpu_available":True,"pixel_validation":"passed"},open("gpu-result.json","w"))'
-          else
-            exit "$status"
-          fi
           MTL_DEBUG_LAYER=1 ./native-host/native-metal-spirv-tests 2>&1 | tee native-metal-spirv-tests.log
           status=${PIPESTATUS[0]}
           if [ "$status" != 77 ] && [ "$status" != 0 ]; then exit "$status"; fi

@@ -597,11 +597,12 @@ struct MetalBackend::Impl {
     if(!source)return Fail(error,"Native in-pass upload staging allocation failed");
     // The group planner rejects any preceding fragment access to this buffer.
     // Only vertex-origin barriers are used, including on Apple3-Apple8 GPUs.
-    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers afterStages:MTLRenderStageVertex beforeStages:MTLRenderStageVertex];
+    id<MTLResource> destination=BufferAt(upload.destination);
+    [encoder memoryBarrierWithResources:&destination count:1 afterStages:MTLRenderStageVertex beforeStages:MTLRenderStageVertex];
     [encoder setRenderPipelineState:*pipeline];[encoder setVertexBuffer:source offset:0 atIndex:0];
     [encoder setVertexBuffer:BufferAt(upload.destination) offset:upload.destination.offset atIndex:1];
     [encoder drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:upload.bytes->size()/16];
-    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers afterStages:MTLRenderStageVertex beforeStages:MTLRenderStageVertex|MTLRenderStageFragment];
+    [encoder memoryBarrierWithResources:&destination count:1 afterStages:MTLRenderStageVertex beforeStages:MTLRenderStageVertex|MTLRenderStageFragment];
     lease->gpu.push_back(source);lease->gpu.push_back(*pipeline);bindings={};
     ++counters.inline_uploads;counters.inline_upload_bytes+=upload.bytes->size();return true;
   }

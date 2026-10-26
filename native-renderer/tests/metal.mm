@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 #include "fixtures.h"
 #include "rex/native/metal_backend.h"
 #include "rex/native/surface_pool.h"
@@ -34,6 +35,8 @@ static Frame TexturedFrame(Surface image,Bytes bytes,uint64_t row,uint64_t size)
   f.commands.insert(f.commands.begin(),upload);return f;
 }
 int main(){@autoreleasepool {
+  auto device=MTLCreateSystemDefaultDevice();
+  if(device)NSLog(@"GPU device: %@, Apple3=%d Mac2=%d",device.name,[device supportsFamily:MTLGPUFamilyApple3],[device supportsFamily:MTLGPUFamilyMac2]);
   MetalBackend available;if(!available.Ready(failure)){std::cout<<"GPU_UNAVAILABLE: "<<failure<<std::endl;return 77;}
   {
     MetalBackend backend;auto f=Triangle();auto& pass=std::get<Pass>(f.commands[0]);pass.commands.push_back(pass.commands[0]);Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{255,0,0,255});
