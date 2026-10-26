@@ -17,6 +17,7 @@ struct BackendOptions {
   // Timing is opt-in. Normal rendering does not create counters or read clocks.
   bool timing=false;
   bool letterbox=true;
+  bool inline_buffer_uploads=true,tight_render_area=true;
 };
 struct Completion {
   uint64_t sequence=0;
@@ -29,6 +30,8 @@ struct BackendStats {
   uint64_t buffer_uploads=0,buffer_reuses=0,constant_pool_reuses=0;
   uint64_t pipeline_compiles=0,pipeline_hits=0,avoided_bindings=0;
   uint64_t surface_bytes=0,geometry_bytes=0,constant_bytes=0;
+  uint64_t surface_allocations=0,inline_uploads=0,inline_upload_bytes=0;
+  uint64_t reduced_passes=0,render_area_pixels=0,render_area_used_pixels=0;
 };
 struct Capabilities {uint64_t max_buffer_length=0;bool float32_filtering=false,packed_16bit_textures=false;};
 class MetalBackend {

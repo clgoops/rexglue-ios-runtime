@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "fixtures.h"
+#include "rex/native/surface_pool.h"
 #include "rex/native/lru.h"
 #include <iostream>
 #include <limits>
@@ -93,5 +94,28 @@ int main(){
   reject([](Frame& f){f.surfaces[0].format=Format::Stencil8View;});
   Lru<Identity,int> cache;cache.Insert(Id(1),1);cache.Insert(Id(2),2);cache.Insert(Id(3),3);require(*cache.Find(Id(1))==1);cache.Trim(2);require(!cache.Contains(Id(2))&&cache.Contains(Id(1))&&cache.Contains(Id(3)));
   cache.Insert({1,2},4);cache.Trim(2);require(cache.Contains(Id(1))&&cache.Contains({1,2})&&!cache.Contains(Id(3)));
+  {
+    Frame grouped=Triangle();auto p=std::get<Pass>(grouped.commands[0]);p.colors[0]->load=Load::Load;
+    grouped.commands[0]=p;BufferUpload u{{Id(500),0,16},Data(std::array<float,4>{})};
+    grouped.commands.push_back(u);grouped.commands.push_back(p);
+    require(RenderGroupEnd(grouped,0)==3);
+    auto hazard=grouped;std::get<Draw>(std::get<Pass>(hazard.commands[0]).commands[0]).bindings[1].buffers[0].view.buffer=Id(500);
+    require(RenderGroupEnd(hazard,0)==1);
+    hazard=grouped;std::get<Pass>(hazard.commands[2]).mergeable=false;require(RenderGroupEnd(hazard,0)==1);
+    hazard=grouped;std::get<BufferUpload>(hazard.commands[1]).destination.offset=4;require(RenderGroupEnd(hazard,0)==1);
+    hazard=grouped;std::get<Pass>(hazard.commands[2]).colors[0]->load=Load::Clear;require(RenderGroupEnd(hazard,0)==1);
+    hazard=grouped;hazard.commands[1]=BufferCopy{{Id(500),0,16},{Id(501),0,16},16};require(RenderGroupEnd(hazard,0)==1);
+    auto& second=std::get<Pass>(grouped.commands[2]);std::get<Draw>(second.commands[0]).bindings[1].buffers[0].view.buffer=Id(500);
+    grouped.commands.push_back(u);grouped.commands.push_back(p);require(RenderGroupEnd(grouped,0)==3);
+    auto& d=std::get<Draw>(std::get<Pass>(grouped.commands[0]).commands[0]);d.scissor={2,3,4,5};
+    grouped.commands.resize(1);require(RenderGroupArea(grouped,0,1)==Rect{0,0,6,8});
+    std::get<Pass>(grouped.commands[0]).colors[0]->load=Load::Clear;
+    require(RenderGroupArea(grouped,0,1)==Rect{0,0,16,16});
+    SurfacePool pool(2048);auto a=Target(41),b=Target(42),c=Target(43);
+    pool.Remember(1,a);pool.Remember(2,b);require(pool.bytes()==2048);
+    auto packet=pool.Find(1);require(packet&&packet->id==a.id&&packet->owner==a.owner);
+    pool.Remember(3,c);require(!pool.Find(2)&&pool.Find(1)&&pool.Find(3)&&pool.bytes()==2048);
+    pool.Clear();require(pool.bytes()==0&&!pool.Find(1)&&packet->owner==a.owner);
+  }
   std::cout<<checks<<" native frame contracts passed\n";
 }

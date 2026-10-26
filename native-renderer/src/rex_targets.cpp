@@ -30,13 +30,14 @@ void RexRenderTargets::Initialize(TransferEncoder encoder) {
   edram.owner=std::make_shared<const Identity>(edram.id);edram_=std::move(edram);
 }
 gfx::RenderTargetCache::RenderTarget* RexRenderTargets::CreateRenderTarget(Key key) {
+  if(auto image=reusable_.Find(key.key))return new NativeTarget(key,std::move(*image));
   Surface image;image.id=next_id_();if(!image.id)return nullptr;
   image.width=key.GetWidth()*draw_resolution_scale_x();
   image.height=GetRenderTargetHeight(key.pitch_tiles_at_32bpp,key.msaa_samples)*draw_resolution_scale_y();
   image.samples=1u<<uint32_t(key.msaa_samples);image.renderable=true;image.sampled=true;
   image.format=key.is_depth?Format::Depth32Stencil8:NativeColorFormat(key.GetColorFormat());
   if(!image.width || !image.height || image.format==Format::Invalid)return nullptr;
-  image.owner=std::make_shared<const Identity>(image.id);return new NativeTarget(key,std::move(image));
+  image.owner=std::make_shared<const Identity>(image.id);reusable_.Remember(key.key,image);return new NativeTarget(key,std::move(image));
 }
 RexDrawProfile RexRenderTargets::Profile() const {
   RexDrawProfile profile;profile.scale_x=draw_resolution_scale_x();profile.scale_y=draw_resolution_scale_y();

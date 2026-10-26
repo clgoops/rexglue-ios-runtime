@@ -303,10 +303,50 @@ bool Joinable(const std::optional<Attachment>& a,const std::optional<Attachment>
 }
 }
 bool Validate(const Frame& frame,std::string& error,const Limits& limits) {return Admission{frame,limits,error}.Run();}
+bool Mergeable(const Pass& a,const Pass& b) {
+  bool join=a.mergeable&&b.mergeable&&a.width==b.width&&a.height==b.height&&a.samples==b.samples&&Joinable(a.depth,b.depth)&&Joinable(a.stencil,b.stencil);
+  if(join)for(size_t i=0;i<4;++i)join&=Joinable(a.colors[i],b.colors[i]);
+  return join;
+}
+size_t RenderGroupEnd(const Frame& frame,size_t begin) {
+  const auto* first=std::get_if<Pass>(&frame.commands.at(begin));
+  if(!first||!first->mergeable)return begin+1;
+  std::set<Identity> fragment_buffers;
+  auto collect=[&](const Pass& pass) {
+    for(const auto& command:pass.commands)if(const auto* d=std::get_if<Draw>(&command))
+      for(const auto& b:d->bindings[1].buffers)fragment_buffers.insert(b.view.buffer);
+  };
+  collect(*first);const Pass* last=first;size_t end=begin+1;
+  while(end<frame.commands.size()) {
+    size_t next=end;
+    while(next<frame.commands.size()) {
+      const auto* u=std::get_if<BufferUpload>(&frame.commands[next]);if(!u)break;
+      if(!u->bytes||u->bytes->empty()||u->bytes->size()%16||u->destination.offset%16||fragment_buffers.contains(u->destination.buffer))return end;
+      ++next;
+    }
+    if(next==frame.commands.size())break;
+    const auto* p=std::get_if<Pass>(&frame.commands[next]);
+    if(!p||!Mergeable(*last,*p))break;
+    collect(*p);last=p;end=next+1;
+  }
+  return end;
+}
+Rect RenderGroupArea(const Frame& frame,size_t begin,size_t end) {
+  const auto& first=std::get<Pass>(frame.commands.at(begin));
+  Rect area{0,0,1,1};
+  for(size_t i=begin;i<end;++i)if(const auto* p=std::get_if<Pass>(&frame.commands[i])) {
+    auto full=[](const auto& a){return a&&(a->load!=Load::Load||a->store!=Store::Store);};
+    if(full(p->depth)||full(p->stencil)||std::any_of(p->colors.begin(),p->colors.end(),full))return {0,0,first.width,first.height};
+    for(const auto& command:p->commands) {
+      Rect r;if(const auto* d=std::get_if<Draw>(&command))r=d->scissor;else r=std::get<RectClear>(command).rectangle;
+      if(r.width&&r.height) {area.width=std::max(area.width,r.x+r.width);area.height=std::max(area.height,r.y+r.height);}
+    }
+  }
+  area.width=std::min(area.width,first.width);area.height=std::min(area.height,first.height);return area;
+}
 void AppendPass(Frame& frame,Pass next) {
   Pass* previous=frame.commands.empty()?nullptr:std::get_if<Pass>(&frame.commands.back());
-  bool join=previous&&previous->mergeable&&next.mergeable&&previous->width==next.width&&previous->height==next.height&&previous->samples==next.samples&&Joinable(previous->depth,next.depth)&&Joinable(previous->stencil,next.stencil);
-  if(join)for(size_t i=0;i<4;++i)join&=Joinable(previous->colors[i],next.colors[i]);
+  bool join=previous&&Mergeable(*previous,next);
   if(!join){frame.commands.emplace_back(std::move(next));return;}
   for(size_t i=0;i<4;++i)if(previous->colors[i])previous->colors[i]->store=next.colors[i]->store;
   if(previous->depth)previous->depth->store=next.depth->store;

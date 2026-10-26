@@ -94,6 +94,7 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
   std::map<Sampler,Identity> samplers_;
   std::optional<ConvertedShader> depth_only_;
   Shader swap_vs_,swap_fs_;Pipeline swap_pipeline_;std::array<std::optional<Surface>,3> output_;uint32_t output_index_=0;
+  BackendStats last_stats_{};
 };
 bool NativeCommandProcessor::SetupContext() {
   if(!CommandProcessor::SetupContext())return false;
@@ -123,7 +124,8 @@ bool NativeCommandProcessor::SetupContext() {
   swap_fs_={next_(),Stage::Fragment,"swap_fragment",{},kSwapFragment,{{ArgumentKind::Texture,0,1,0,1,TextureKind::TwoDArray},{ArgumentKind::Buffer,0,1,2576,16}}};
   swap_pipeline_.id=next_();swap_pipeline_.vertex=swap_vs_.id;swap_pipeline_.fragment=swap_fs_.id;swap_pipeline_.colors[0]=Format::RGBA8;
   REXLOG_INFO("Native Metal guest GPU active: {} shared-memory chunks, original resolution, no Vulkan command submission",chunks.size());
-  REXLOG_INFO("Native Metal resource policy: textures 128/256 MiB, soft lifetime 2 s; surfaces 768 MiB; retire unowned EDRAM targets after submission");
+  REXLOG_INFO("Native Metal resource policy: textures 128/256 MiB, soft lifetime 2 s; surfaces 768 MiB; retire targets at guest swaps with a bounded 128 MiB exact-key reuse pool");
+  REXLOG_INFO("Native Metal batching: aligned buffer uploads within compatible passes; vertex-origin barriers only; tight scissor/clear render extents");
   return true;
 }
 void NativeCommandProcessor::ShutdownContext() {
@@ -149,7 +151,11 @@ bool NativeCommandProcessor::Flush(std::string& error) {
   // avoided in the draw path; texture owner references protect pending packets.
   if(accepted) {
     textures_->CompletedSubmissionUpdated(guest_completed_->load());
-    targets_->ClearCache();
+    // Keep targets warm across partial submissions. A bounded exact-key pool
+    // also retains recently unowned images across actual guest frame pruning.
+    if(service_->backend.Stats().surface_bytes>(640ull<<20)) {
+      targets_->DropReusableSurfaces();targets_->ClearCache();
+    }
   }
   if(!accepted)Fail(error);return accepted;
 }
@@ -301,9 +307,16 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
   Pass pass;pass.width=width;pass.height=height;pass.colors[0]=Attachment{{image.id},Load::Discard};Draw draw;draw.pipeline=swap_pipeline_.id;draw.vertices=3;draw.viewport={0,0,double(width),double(height),0,1};draw.scissor={0,0,width,height};
   draw.bindings[1].textures={{0,source}};draw.bindings[1].buffers={{0,{constants.id,0,sizeof(gamma)}}};pass.commands.push_back(std::move(draw));AppendPass(*frame_,std::move(pass));
   if(!Flush(error)) {Fail(error);return;}
+  targets_->ClearCache();
   if((output_index_%120)==0) {
     auto stats=service_->backend.Stats();
     REXLOG_INFO("Native Metal surface storage: {} MiB; guest submissions {}",stats.surface_bytes>>20,submission_);
+    REXLOG_INFO("Native Metal last 120 swaps: allocations={} pipelines={} passes={} inline_uploads={} upload_KiB={} render_Mpix={:.1f}->{:.1f}",
+      stats.surface_allocations-last_stats_.surface_allocations,stats.pipeline_compiles-last_stats_.pipeline_compiles,
+      stats.passes-last_stats_.passes,stats.inline_uploads-last_stats_.inline_uploads,
+      (stats.inline_upload_bytes-last_stats_.inline_upload_bytes)>>10,
+      double(stats.render_area_pixels-last_stats_.render_area_pixels)/1e6,double(stats.render_area_used_pixels-last_stats_.render_area_used_pixels)/1e6);
+    last_stats_=stats;
   }
   if(auto* presenter=graphics_system_->presenter())presenter->RefreshGuestOutput(width,height,width,height,[image](ui::Presenter::GuestOutputRefreshContext& c) {
     auto& context=static_cast<NativeRefreshContext&>(c);context.output=image;context.SetIs8bpc(true);return true;

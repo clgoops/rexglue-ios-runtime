@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include "rex_draw_state.h"
+#include "surface_pool.h"
 #include <rex/graphics/pipeline/render_target/cache.h>
 namespace rex::graphics {class TextureCache;}
 namespace rex::native {
@@ -33,6 +34,7 @@ class RexRenderTargets final:public graphics::RenderTargetCache {
   ~RexRenderTargets() override;
   void Initialize(TransferEncoder={});
   void ClearCache() override;
+  void DropReusableSurfaces() {reusable_.Clear();}
   Path GetPath() const override {return Path::kHostRenderTargets;}
   bool PrepareDraw(Frame&,bool rasterization,graphics::reg::RB_DEPTHCONTROL,uint32_t color_mask,
                    const graphics::Shader& vertex,Pass&,std::string& error);
@@ -55,6 +57,7 @@ class RexRenderTargets final:public graphics::RenderTargetCache {
   std::unique_ptr<RexTargetTransfers> transfers_;
   std::unique_ptr<RexResolve> resolves_;
   std::optional<BufferStorage> edram_;
+  SurfacePool reusable_{128ull<<20};
   bool initialized_=false,faulted_=false;
 };
 } // namespace rex::native

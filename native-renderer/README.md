@@ -57,7 +57,7 @@ execution of the updated game still requires confirmation.
 
 Native resource admission now coordinates the sampled texture cache with the
 surface budget: 128/256 MiB sampled-texture limits with a two-second soft
-lifetime, and 768 MiB total native surfaces. After accepted guest submissions,
+lifetime, and 768 MiB total native surfaces. At guest swaps or a surface high-water mark,
 the common SDK prunes render targets which no longer own EDRAM data, retaining
 both host-depth precision owners. Accumulated bindings are invalidated before
 pruning; immutable packets retain image owners until GPU completion. A full
@@ -71,3 +71,16 @@ The surface-retirement revision (source 70c416a) passed Apple renderer run
 and live-image preservation, plus all 33 production UI checks. Full native iOS
 runtime run 40292423829 succeeded. These results do not establish a device FPS
 gain; the replacement game package requires an iPhone test.
+
+The next revision keeps a bounded 128 MiB exact-key surface reuse pool to avoid
+reallocating targets that briefly lose EDRAM ownership. Compatible passes can
+keep their attachments in one encoder across aligned CPU buffer uploads. The
+upload uses a rasterization-disabled vertex copy with vertex-origin memory
+barriers; preceding fragment-buffer access, memexport, texture/compute work,
+unaligned copies and incompatible attachment states retain encoder boundaries.
+Render extents follow actual scissors and partial clears, preserving full
+attachment clears. Tests cover old/new vertex values, fixed-function index
+fetch, fragment-hazard fallback, 1x/2x/4x MSAA and surrounding pixel preservation.
+A 128-pass synthetic workload reports GPU windows with batching off/on; it is
+not a captured game workload or an iPhone FPS prediction. Validation of this
+revision is pending until its Apple workflow results are recorded.

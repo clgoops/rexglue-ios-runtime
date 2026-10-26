@@ -184,6 +184,8 @@ struct MetalBackend::Impl {
   Lru<Identity,ComputeObject> computes;
   Lru<Identity,SamplerObject> samplers;
   Lru<ClearKey,ClearObject> clears;
+  Lru<ClearKey,id<MTLRenderPipelineState>> upload_pipelines;
+  id<MTLFunction> upload_vertex=nil;
   std::map<Identity,SurfaceObject>::iterator surface_sweep=surfaces.end();
   std::map<Identity,StorageObject>::iterator storage_sweep=storage.end();
   uint64_t surface_bytes=0,storage_bytes=0;
@@ -264,7 +266,7 @@ struct MetalBackend::Impl {
       id<MTLTexture> texture=[device newTextureWithDescriptor:desc];if(!texture)return Fail(error,"Native texture allocation failed");
       const uint64_t actual=texture.allocatedSize;
       if(!SurfaceCapacity(actual,spec,error))return false;
-      surface_bytes+=actual;surfaces.emplace(spec.id,SurfaceObject{shape,spec.owner,texture});lease->gpu.push_back(texture);
+      surface_bytes+=actual;++counters.surface_allocations;surfaces.emplace(spec.id,SurfaceObject{shape,spec.owner,texture});lease->gpu.push_back(texture);
     }
     for(const auto& spec:f.buffer_storage){
       auto i=storage.find(spec.id);
@@ -471,6 +473,7 @@ struct MetalBackend::Impl {
     std::array<std::array<id<MTLTexture>,128>,2> textures{};
     std::array<std::array<id<MTLSamplerState>,16>,2> samplers{};
     id<MTLRenderPipelineState> pipeline=nil;id<MTLDepthStencilState> depth=nil;
+    bool depth_set=false;
   };
   bool Bind(id<MTLRenderCommandEncoder> encoder,const Bindings& bindings,size_t stage,EncoderBindings& cached,
       std::shared_ptr<FrameLease> lease,std::string& error){
@@ -502,10 +505,11 @@ struct MetalBackend::Impl {
   }
   bool DrawCall(id<MTLRenderCommandEncoder> e,const Draw& d,EncoderBindings& cache,
       std::shared_ptr<FrameLease> lease,std::string& error){
+    if(!d.scissor.width||!d.scissor.height)return true;
     const auto& p=active_pipelines.at(d.pipeline);
     if(!ActualBuffers(d.bindings[0],p.arguments[0],error)||!ActualBuffers(d.bindings[1],p.arguments[1],error))return false;
     if(cache.pipeline!=p.pipeline){[e setRenderPipelineState:p.pipeline];cache.pipeline=p.pipeline;}else ++counters.avoided_bindings;
-    if(cache.depth!=p.depth){[e setDepthStencilState:p.depth];cache.depth=p.depth;}else ++counters.avoided_bindings;
+    if(!cache.depth_set||cache.depth!=p.depth){[e setDepthStencilState:p.depth];cache.depth=p.depth;cache.depth_set=true;}else ++counters.avoided_bindings;
     if(!Bind(e,d.bindings[0],0,cache,lease,error)||!Bind(e,d.bindings[1],1,cache,lease,error))return false;
     const auto& v=d.viewport;[e setViewport:MTLViewport{v.x,v.y,v.width,v.height,v.near_z,v.far_z}];
     [e setScissorRect:MTLScissorRect{d.scissor.x,d.scissor.y,d.scissor.width,d.scissor.height}];
@@ -567,23 +571,65 @@ struct MetalBackend::Impl {
     [e setStencilReferenceValue:c.stencil_value];[e setFragmentBytes:&constants length:sizeof(constants) atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];cache={};return true;
   }
-  bool Render(id<MTLCommandBuffer> cb,const Pass& pass,std::shared_ptr<FrameLease> lease,std::string& error){
-    auto desc=[MTLRenderPassDescriptor new];desc.renderTargetWidth=pass.width;desc.renderTargetHeight=pass.height;
+  bool InlineUpload(id<MTLRenderCommandEncoder> encoder,const BufferUpload& upload,const Pass& pass,
+      EncoderBindings& bindings,std::shared_ptr<FrameLease> lease,std::string& error){
+    if(!upload_vertex) {
+      const char* source="#include <metal_stdlib>\nusing namespace metal;vertex void upload_vertex(uint i[[vertex_id]],const device uint4* src[[buffer(0)]],device uint4* dst[[buffer(1)]]){dst[i]=src[i];}";
+      auto options=[MTLCompileOptions new];NSError* failure=nil;
+      auto library=[device newLibraryWithSource:[NSString stringWithUTF8String:source] options:options error:&failure];
+      if(!library){error=DescribeError(failure);return false;}upload_vertex=[library newFunctionWithName:@"upload_vertex"];
+      if(!upload_vertex)return Fail(error,"Native in-pass upload vertex function is missing");
+    }
+    ClearKey key;key.samples=pass.samples;
+    auto format=[&](const SurfaceView& view){return view.format==Format::Invalid?surfaces.at(view.surface).source.format:view.format;};
+    for(size_t i=0;i<4;++i)if(pass.colors[i])key.colors[i]=format(pass.colors[i]->view);
+    if(pass.depth)key.depth=format(pass.depth->view);if(pass.stencil)key.stencil=format(pass.stencil->view);
+    auto* pipeline=upload_pipelines.Find(key);
+    if(!pipeline) {
+      auto desc=[MTLRenderPipelineDescriptor new];desc.vertexFunction=upload_vertex;desc.rasterizationEnabled=NO;desc.rasterSampleCount=pass.samples;
+      for(size_t i=0;i<4;++i)desc.colorAttachments[i].pixelFormat=Pixel(key.colors[i]);
+      desc.depthAttachmentPixelFormat=Pixel(key.depth);desc.stencilAttachmentPixelFormat=Pixel(key.stencil);
+      NSError* failure=nil;auto created=[device newRenderPipelineStateWithDescriptor:desc error:&failure];
+      if(!created){error=DescribeError(failure);return false;}
+      pipeline=&upload_pipelines.Insert(key,created);upload_pipelines.Trim(128);
+    }
+    id<MTLBuffer> source=[device newBufferWithBytes:upload.bytes->data() length:upload.bytes->size() options:MTLResourceStorageModeShared];
+    if(!source)return Fail(error,"Native in-pass upload staging allocation failed");
+    // The group planner rejects any preceding fragment access to this buffer.
+    // Only vertex-origin barriers are used, including on Apple3-Apple8 GPUs.
+    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers afterStages:MTLRenderStageVertex beforeStages:MTLRenderStageVertex];
+    [encoder setRenderPipelineState:*pipeline];[encoder setVertexBuffer:source offset:0 atIndex:0];
+    [encoder setVertexBuffer:BufferAt(upload.destination) offset:upload.destination.offset atIndex:1];
+    [encoder drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:upload.bytes->size()/16];
+    [encoder memoryBarrierWithScope:MTLBarrierScopeBuffers afterStages:MTLRenderStageVertex beforeStages:MTLRenderStageVertex|MTLRenderStageFragment];
+    lease->gpu.push_back(source);lease->gpu.push_back(*pipeline);bindings={};
+    ++counters.inline_uploads;counters.inline_upload_bytes+=upload.bytes->size();return true;
+  }
+  bool Render(id<MTLCommandBuffer> cb,const Frame& frame,size_t begin,size_t end,std::shared_ptr<FrameLease> lease,std::string& error){
+    const auto& pass=std::get<Pass>(frame.commands[begin]);const auto& last=std::get<Pass>(frame.commands[end-1]);
+    Rect area=options.tight_render_area?RenderGroupArea(frame,begin,end):Rect{0,0,pass.width,pass.height};
+    auto desc=[MTLRenderPassDescriptor new];desc.renderTargetWidth=area.width;desc.renderTargetHeight=area.height;
     desc.defaultRasterSampleCount=pass.samples;
     for(size_t i=0;i<4;++i)if(pass.colors[i]){
-      auto a=desc.colorAttachments[i];Attachment(a,*pass.colors[i],error);if(!a.texture)return false;
+      auto attachment=*pass.colors[i];attachment.store=last.colors[i]->store;
+      auto a=desc.colorAttachments[i];Attachment(a,attachment,error);if(!a.texture)return false;
       const auto& c=pass.colors[i]->color;a.clearColor=MTLClearColorMake(c[0],c[1],c[2],c[3]);
     }
-    if(pass.depth){Attachment(desc.depthAttachment,*pass.depth,error);if(!desc.depthAttachment.texture)return false;desc.depthAttachment.clearDepth=pass.depth->depth;}
-    if(pass.stencil){Attachment(desc.stencilAttachment,*pass.stencil,error);if(!desc.stencilAttachment.texture)return false;desc.stencilAttachment.clearStencil=pass.stencil->stencil;}
+    if(pass.depth){auto a=*pass.depth;a.store=last.depth->store;Attachment(desc.depthAttachment,a,error);if(!desc.depthAttachment.texture)return false;desc.depthAttachment.clearDepth=pass.depth->depth;}
+    if(pass.stencil){auto a=*pass.stencil;a.store=last.stencil->store;Attachment(desc.stencilAttachment,a,error);if(!desc.stencilAttachment.texture)return false;desc.stencilAttachment.clearStencil=pass.stencil->stencil;}
     id<MTLRenderCommandEncoder> e=[cb renderCommandEncoderWithDescriptor:desc];if(!e)return Fail(error,"Native render encoder creation failed");
     EncoderBindings bindings;bool success=true;
-    for(const auto& command:pass.commands){
-      if(const auto* draw=std::get_if<Draw>(&command))success=DrawCall(e,*draw,bindings,lease,error);
-      else success=ClearCall(e,std::get<RectClear>(command),pass,bindings,lease,error);
-      if(!success)break;
+    for(size_t i=begin;i<end&&success;++i) {
+      if(const auto* upload=std::get_if<BufferUpload>(&frame.commands[i]))success=InlineUpload(e,*upload,pass,bindings,lease,error);
+      else for(const auto& command:std::get<Pass>(frame.commands[i]).commands){
+        if(const auto* draw=std::get_if<Draw>(&command))success=DrawCall(e,*draw,bindings,lease,error);
+        else success=ClearCall(e,std::get<RectClear>(command),pass,bindings,lease,error);
+        if(!success)break;
+      }
     }
-    [e endEncoding];++counters.passes;return success;
+    [e endEncoding];++counters.passes;counters.render_area_pixels+=uint64_t(pass.width)*pass.height;
+    counters.render_area_used_pixels+=uint64_t(area.width)*area.height;
+    if(area.width!=pass.width||area.height!=pass.height)++counters.reduced_passes;return success;
   }
   bool Compute(id<MTLCommandBuffer> cb,const Dispatch& d,const Frame& frame,std::shared_ptr<FrameLease> lease,std::string& error){
     const Shader& shader=ShaderAt(frame,d.shader);auto function=Function(shader,lease,error);if(!function)return false;
@@ -703,9 +749,13 @@ bool MetalBackend::Submit(std::shared_ptr<const Frame> frame,std::function<void(
   auto lease=std::make_shared<FrameLease>();lease->frame=frame;lease->state=state;
   if(!impl_->Prepare(*frame,lease,error))return false;
   id<MTLCommandBuffer> command=[impl_->queue commandBuffer];if(!command)return Fail(error,"Native command buffer creation failed");
-  for(const auto& operation:frame->commands){
+  for(size_t index=0;index<frame->commands.size();++index){
+    const auto& operation=frame->commands[index];
     bool success;
-    if(const auto* p=std::get_if<Pass>(&operation))success=impl_->Render(command,*p,lease,error);
+    if(std::holds_alternative<Pass>(operation)) {
+      const size_t end=impl_->options.inline_buffer_uploads&&([impl_->device supportsFamily:MTLGPUFamilyApple3]||[impl_->device supportsFamily:MTLGPUFamilyMac2])?RenderGroupEnd(*frame,index):index+1;
+      success=impl_->Render(command,*frame,index,end,lease,error);index=end-1;
+    }
     else if(const auto* d=std::get_if<Dispatch>(&operation))success=impl_->Compute(command,*d,*frame,lease,error);
     else if(const auto* r=std::get_if<Resolve>(&operation))success=impl_->ResolveImage(command,*r,error);
     else success=impl_->Transfer(command,operation,lease,error);

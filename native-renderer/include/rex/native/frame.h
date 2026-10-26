@@ -223,9 +223,9 @@ struct Dispatch {
   Bindings bindings;
   std::array<uint32_t,3> groups{1,1,1},threads{1,1,1};
 };
-// Mutable-buffer/image hazards cross explicit encoder boundaries. They are not
-// hidden inside a merged pass. The producer splits passes when guest memexport
-// or target feedback needs a handoff.
+// Image/compute hazards cross explicit encoder boundaries. An aligned CPU
+// buffer upload may use an in-pass vertex copy if the planner proves that no
+// preceding fragment stage accesses its destination. Other writes stay split.
 using Command=std::variant<TextureUpload,BufferUpload,BufferCopy,BufferToTexture,Dispatch,Pass,ImageCopy,Resolve>;
 struct Frame {
   uint64_t sequence=0;
@@ -252,4 +252,11 @@ bool Validate(const Frame&,std::string& error,const Limits& limits={});
 // Joins adjacent conventional passes only when removing the store/load boundary
 // preserves every attachment. Copies, resolves and partial clears stay ordered.
 void AppendPass(Frame&,Pass);
+// Extends a render group across aligned CPU uploads only when no preceding
+// fragment stage accesses their destination. This needs vertex-to-vertex and
+// vertex-to-fragment barriers, which Apple GPUs support. Other hazards split.
+size_t RenderGroupEnd(const Frame&,size_t begin);
+// An origin-anchored render area contains all scissors/partial clears. Full
+// attachment clears and discarded stores preserve the original full extent.
+Rect RenderGroupArea(const Frame&,size_t begin,size_t end);
 } // namespace rex::native

@@ -76,11 +76,17 @@ NativeService::NativeService():backend(Options()) {}
 void NativeService::Fail(const std::string& error) {if(!failed.exchange(true))REXLOG_ERROR("Native Metal session stopped: {}",error);}
 bool NativeService::Submit(std::shared_ptr<Frame> frame,std::string& error,std::function<void()> completed_callback) {
   std::lock_guard lock(mutex);if(failed) {error="native Metal session has failed";return false;}frame->sequence=++sequence_;
-  auto weak=weak_from_this();return backend.Submit(std::move(frame),[weak,done=std::move(completed_callback)](Completion result) {
+  const bool guest=bool(completed_callback);const auto before=backend.Stats();
+  auto weak=weak_from_this();bool accepted=backend.Submit(std::move(frame),[weak,done=std::move(completed_callback)](Completion result) {
     if(auto self=weak.lock()) {if(!result.success)self->Fail(result.error);self->completed.store(result.sequence);
       if(done&&result.timing_available) {self->performance.SetGpuTimingSupported(true);self->performance.RecordGpuSubmission(uint64_t(result.native_window_ms*1e6));}}
     if(result.success&&done)done();
   },error);
+  if(accepted&&guest) {
+    const auto after=backend.Stats();performance.RecordRenderAreas(after.passes-before.passes,after.reduced_passes-before.reduced_passes,
+      after.render_area_pixels-before.render_area_pixels,after.render_area_used_pixels-before.render_area_used_pixels);
+  }
+  return accepted;
 }
 bool NativeService::Drain(std::string& error) {std::lock_guard lock(mutex);return backend.Drain(std::chrono::seconds(30),error);}
 std::unique_ptr<ui::GraphicsProvider> CreateNativeProvider(std::shared_ptr<NativeService> service) {return std::make_unique<NativeProvider>(std::move(service));}

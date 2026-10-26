@@ -2,10 +2,12 @@
 #import <Foundation/Foundation.h>
 #include "fixtures.h"
 #include "rex/native/metal_backend.h"
+#include "rex/native/surface_pool.h"
 #include <atomic>
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+#include <future>
 using namespace test;
 static int checks=0,cases=0;
 static std::string failure;
@@ -73,6 +75,82 @@ int main(){@autoreleasepool {
     MetalBackend backend;Frame f;f.sequence=1;f.surfaces={Target(1)};auto pass=ColorPass(1,{0,0,1,1});
     RectClear clear;clear.rectangle={4,4,8,8};clear.colors=1;clear.color[0]={1,0,0,1};pass.commands.emplace_back(clear);f.commands.emplace_back(pass);
     Submit(backend,std::move(f));Pixel(backend,View(1),5,5,{255,0,0,255});Pixel(backend,View(1),1,1,{0,0,255,255});Done("partial clear preserves the surrounding target");
+  }
+  for(uint32_t samples:{1u,4u}) {
+    MetalBackend backend;auto f=Triangle(1,Target(1,Format::RGBA8,samples));f.buffers.clear();
+    f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
+    f.shaders[0].arguments={{ArgumentKind::Buffer,0,1,16,16}};
+    f.shaders[0].msl="#include <metal_stdlib>\nusing namespace metal;struct O{float4 p[[position]];float4 c;};vertex O vertex_main(uint i[[vertex_id]],const device float4& c[[buffer(0)]]){float2 p=float2((i<<1)&2,i&2);return O{float4(p*2-1,.5,1),c};}";
+    f.shaders[1].arguments.clear();f.shaders[1].msl="#include <metal_stdlib>\nusing namespace metal;struct O{float4 p[[position]];float4 c;};fragment float4 fragment_main(O in[[stage_in]]){return in.c;}";
+    auto& first=std::get<Pass>(f.commands[0]);auto& draw=std::get<Draw>(first.commands[0]);
+    draw.bindings[1].buffers.clear();draw.bindings[0].buffers={{0,{Id(500),0,16}}};draw.scissor={0,0,8,16};
+    Pass second=first;second.colors[0]->load=Load::Load;std::get<Draw>(second.commands[0]).scissor={8,0,8,16};
+    f.commands.insert(f.commands.begin(),BufferUpload{{Id(500),0,16},Data(std::array<float,4>{1,0,0,1})});
+    f.commands.push_back(BufferUpload{{Id(500),0,16},Data(std::array<float,4>{0,1,0,1})});f.commands.push_back(second);
+    if(samples>1){f.surfaces.push_back(Target(2));f.commands.push_back(Resolve{View(1),View(2),ResolveFilter::Average});f.output=View(2);}
+    Submit(backend,std::move(f));const auto view=samples>1?View(2):View(1);
+    Pixel(backend,view,4,8,{255,0,0,255});Pixel(backend,view,12,8,{0,255,0,255});
+    Check(backend.Stats().passes==1&&backend.Stats().inline_uploads==1);
+    Done(samples==1?"in-pass vertex upload preserves old/new draw values":"4x MSAA in-pass upload preserves old/new draw values");
+  }
+  {
+    MetalBackend backend;auto f=Triangle();f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
+    auto& first=std::get<Pass>(f.commands[0]);auto& draw=std::get<Draw>(first.commands[0]);draw.indices=BufferView{Id(500),0,16};draw.index_bytes=4;draw.index_count=3;draw.vertices=0;draw.scissor={0,0,8,16};
+    Pass second=first;second.colors[0]->load=Load::Load;auto& d=std::get<Draw>(second.commands[0]);d.scissor={8,0,8,16};
+    f.buffers.push_back({Id(301),Data(std::array<float,4>{0,1,0,1}),true});d.bindings[1].buffers={{0,{Id(301),0,16}}};
+    f.commands.insert(f.commands.begin(),BufferUpload{{Id(500),0,16},Data(std::array<uint32_t,4>{0,1,2,0})});
+    f.commands.push_back(BufferUpload{{Id(500),0,16},Data(std::array<uint32_t,4>{})});f.commands.push_back(second);
+    Submit(backend,std::move(f));Pixel(backend,View(1),4,8,{255,0,0,255});Pixel(backend,View(1),12,8,{0,0,0,255});
+    Check(backend.Stats().passes==1&&backend.Stats().inline_uploads==1);Done("in-pass upload synchronizes subsequent hardware index fetch");
+  }
+  {
+    MetalBackend backend;auto f=Triangle();f.buffers.clear();f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
+    auto& first=std::get<Pass>(f.commands[0]);auto& draw=std::get<Draw>(first.commands[0]);draw.scissor={0,0,8,16};draw.bindings[1].buffers={{0,{Id(500),0,16}}};
+    Pass second=first;second.colors[0]->load=Load::Load;std::get<Draw>(second.commands[0]).scissor={8,0,8,16};
+    f.commands.insert(f.commands.begin(),BufferUpload{{Id(500),0,16},Data(std::array<float,4>{1,0,0,1})});
+    f.commands.push_back(BufferUpload{{Id(500),0,16},Data(std::array<float,4>{0,1,0,1})});f.commands.push_back(second);
+    Submit(backend,std::move(f));Pixel(backend,View(1),4,8,{255,0,0,255});Pixel(backend,View(1),12,8,{0,255,0,255});
+    Check(backend.Stats().passes==2&&backend.Stats().inline_uploads==0);Done("fragment read/write hazard retains its encoder boundary");
+  }
+  {
+    MetalBackend backend;SurfacePool pool(1024);pool.Remember(123,Target(1));auto image=pool.Find(123);
+    Submit(backend,Triangle(1,*image));auto reused=pool.Find(123);Check(reused->id==image->id&&reused->owner==image->owner);
+    Frame f;f.sequence=2;f.surfaces={*reused};Pass pass;pass.width=pass.height=16;pass.colors[0]=Attachment{View(1)};
+    RectClear clear;clear.rectangle={0,0,4,4};clear.colors=1;clear.color[0]={0,1,0,1};pass.commands.push_back(clear);f.commands.push_back(pass);
+    Submit(backend,std::move(f));Pixel(backend,View(1),1,1,{0,255,0,255});Pixel(backend,View(1),12,12,{255,0,0,255});
+    Check(backend.Stats().surface_allocations==1&&backend.Stats().reduced_passes==1);
+    Done("exact-key surface reuse and cropped render area preserve surrounding pixels");
+  }
+  for(uint32_t samples:{2u,4u}) {
+    MetalBackend backend;Surface image=Target(1,Format::RGBA8,samples),output=Target(2);
+    auto first=Triangle(1,image);first.surfaces.push_back(output);first.output=View(2);first.commands.push_back(Resolve{View(1),View(2),ResolveFilter::Average});Submit(backend,std::move(first));
+    Frame second;second.sequence=2;second.surfaces={image,output};Pass pass;pass.width=pass.height=16;pass.samples=samples;pass.colors[0]=Attachment{View(1)};
+    RectClear clear;clear.rectangle={0,0,4,4};clear.colors=1;clear.color[0]={0,1,0,1};pass.commands.push_back(clear);second.commands.push_back(pass);
+    second.commands.push_back(Resolve{View(1),View(2),ResolveFilter::Average});Submit(backend,std::move(second));
+    Pixel(backend,View(2),1,1,{0,255,0,255});Pixel(backend,View(2),12,12,{255,0,0,255});
+    Check(backend.Stats().reduced_passes==1);Done(samples==2?"2x MSAA cropped pass preserves surrounding samples":"4x MSAA cropped pass preserves surrounding samples");
+  }
+  {
+    // A controlled workload isolates encoder/store-load overhead. It is not
+    // a game benchmark, and its timing ratio is not a device FPS prediction.
+    constexpr unsigned count=128,rounds=3;double elapsed[2]{};
+    for(unsigned mode=0;mode<2;++mode) {
+      BackendOptions options;options.inline_buffer_uploads=bool(mode);options.tight_render_area=false;options.timing=true;MetalBackend backend(options);
+      Surface image=Target(1,Format::RGBA8,4);image.width=1280;image.height=720;auto f=Triangle(1,image);f.output.reset();
+      f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
+      auto first=std::get<Pass>(f.commands[0]);first.width=1280;first.height=720;f.commands={first};
+      auto next=first;next.colors[0]->load=Load::Load;
+      for(unsigned i=1;i<count;++i) {f.commands.push_back(BufferUpload{{Id(500),0,16},Data(std::array<uint32_t,4>{i,0,0,0})});f.commands.push_back(next);}
+      for(unsigned round=0;round<rounds;++round) {
+        f.sequence=round+1;std::promise<Completion> promise;auto result=promise.get_future();
+        Check(backend.Submit(std::make_shared<const Frame>(f),[&](Completion c){promise.set_value(std::move(c));},failure));
+        Check(backend.Drain(std::chrono::seconds(30),failure));Check(result.wait_for(std::chrono::seconds(5))==std::future_status::ready);
+        auto c=result.get();Check(c.success&&c.timing_available);if(round)elapsed[mode]+=c.native_window_ms;
+      }
+      Check(backend.Stats().passes==rounds*(mode?1:count));
+    }
+    std::cout<<"SYNTHETIC_UPLOAD_BATCH_GPU_MS baseline="<<elapsed[0]/2<<" batched="<<elapsed[1]/2<<std::endl;
+    Done("128-pass upload workload preserves ordering while using one render encoder");
   }
   {
     MetalBackend backend;auto f=Triangle();f.pipelines[0].blend[0].write_mask=1;std::get<Pass>(f.commands[0]).colors[0]->color={0,0,1,1};
