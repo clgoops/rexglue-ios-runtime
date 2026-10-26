@@ -32,6 +32,7 @@ class RexRenderTargets final:public graphics::RenderTargetCache {
                    std::function<Identity()> next_id,uint32_t scale_x=1,uint32_t scale_y=1);
   ~RexRenderTargets() override;
   void Initialize(TransferEncoder={});
+  void ClearCache() override;
   Path GetPath() const override {return Path::kHostRenderTargets;}
   bool PrepareDraw(Frame&,bool rasterization,graphics::reg::RB_DEPTHCONTROL,uint32_t color_mask,
                    const graphics::Shader& vertex,Pass&,std::string& error);

@@ -54,3 +54,14 @@ test: first atlas upload, cached second frame and white fallback pass 33 checks
 with real Metal pixels. Restoring a zero image pitch reproduces frame rejection.
 Optional UI rejection no longer immediately stops guest presentation. Device
 execution of the updated game still requires confirmation.
+
+Native resource admission now coordinates the sampled texture cache with the
+surface budget: 128/256 MiB sampled-texture limits with a two-second soft
+lifetime, and 768 MiB total native surfaces. After accepted guest submissions,
+the common SDK prunes render targets which no longer own EDRAM data, retaining
+both host-depth precision owners. Accumulated bindings are invalidated before
+pruning; immutable packets retain image owners until GPU completion. A full
+expired-owner sweep and bounded wait for older GPU packets precede a budget
+rejection. Live images are never discarded to satisfy the cap. GPU regression
+cases exercise pressure beyond the incremental scan and preservation of live
+pixels. Their results for this revision must be checked in VALIDATION.json.

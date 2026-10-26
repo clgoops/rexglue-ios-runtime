@@ -203,19 +203,46 @@ struct MetalBackend::Impl {
     {std::lock_guard lock(pool->mutex);counters.geometry_bytes=pool->geometry;counters.constant_bytes=pool->constants;}
     std::lock_guard lock(state->mutex);auto complete=state->stats.completed;state->stats=counters;state->stats.completed=complete;
   }
-  void Sweep(){
-    for(size_t n=0;n<64&&!surfaces.empty();++n){
+  void Sweep(bool full=false){
+    const size_t surface_count=full?surfaces.size():std::min<size_t>(64,surfaces.size());
+    for(size_t n=0;n<surface_count&&!surfaces.empty();++n){
       if(surface_sweep==surfaces.end())surface_sweep=surfaces.begin();
       auto i=surface_sweep++;
       if(!i->second.owner.expired())continue;
       surface_bytes-=i->second.texture.allocatedSize;
       surfaces.erase(i);
     }
-    for(size_t n=0;n<64&&!storage.empty();++n){
+    const size_t storage_count=full?storage.size():std::min<size_t>(64,storage.size());
+    for(size_t n=0;n<storage_count&&!storage.empty();++n){
       if(storage_sweep==storage.end())storage_sweep=storage.begin();
       auto i=storage_sweep++;if(!i->second.owner.expired())continue;
       storage_bytes-=i->second.buffer.length;storage.erase(i);
     }
+  }
+  bool SurfaceCapacity(uint64_t requested,const Surface& spec,std::string& error){
+    auto exceeds=[&]{return requested>options.surface_budget||surface_bytes>options.surface_budget-requested;};
+    // Normal maintenance is incremental. Before rejecting a packet, examine
+    // every cache entry so expired images behind 64 live entries are reclaimed.
+    // Never discard a live owner or an image retained by an in-flight packet.
+    if(exceeds())Sweep(true);
+    if(exceeds()) {
+      // Admission has reserved one slot for the packet being prepared, but it
+      // has not been encoded yet. On pressure only, let older packets retire
+      // before making the final decision; their frame leases may be the last
+      // owners of targets just removed from the guest cache.
+      std::unique_lock lock(state->mutex);
+      if(!state->changed.wait_for(lock,std::chrono::seconds(5),[&]{return state->pending<=1||state->lost;}))
+        return Fail(error,"Native surface pressure did not retire within five seconds");
+      if(state->lost) {error=state->loss;return false;}
+      lock.unlock();Sweep(true);
+    }
+    if(!exceeds())return true;
+    error="Native surface budget exhausted: live="+std::to_string(surface_bytes)+
+      " requested="+std::to_string(requested)+" budget="+std::to_string(options.surface_budget)+
+      " bytes, surfaces="+std::to_string(surfaces.size())+" new="+std::to_string(spec.width)+
+      "x"+std::to_string(spec.height)+" samples="+std::to_string(spec.samples)+
+      " format="+std::to_string(uint32_t(spec.format));
+    return false;
   }
   bool Surfaces(const Frame& f,std::shared_ptr<FrameLease> lease,std::string& error){
     Sweep();
@@ -233,10 +260,10 @@ struct MetalBackend::Impl {
       desc.sampleCount=spec.samples;desc.storageMode=MTLStorageModePrivate;
       desc.usage=MTLTextureUsagePixelFormatView|(spec.renderable?MTLTextureUsageRenderTarget:0)|(spec.sampled?MTLTextureUsageShaderRead:0)|(spec.storage?MTLTextureUsageShaderWrite:0);
       const auto estimate=[device heapTextureSizeAndAlignWithDescriptor:desc].size;
-      if(estimate>options.surface_budget||surface_bytes>options.surface_budget-estimate)return Fail(error,"Live surface storage exceeds the native texture budget");
+      if(!SurfaceCapacity(estimate,spec,error))return false;
       id<MTLTexture> texture=[device newTextureWithDescriptor:desc];if(!texture)return Fail(error,"Native texture allocation failed");
       const uint64_t actual=texture.allocatedSize;
-      if(actual>options.surface_budget||surface_bytes>options.surface_budget-actual)return Fail(error,"Native texture capacity exceeds its budget");
+      if(!SurfaceCapacity(actual,spec,error))return false;
       surface_bytes+=actual;surfaces.emplace(spec.id,SurfaceObject{shape,spec.owner,texture});lease->gpu.push_back(texture);
     }
     for(const auto& spec:f.buffer_storage){

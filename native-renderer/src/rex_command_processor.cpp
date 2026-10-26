@@ -10,6 +10,7 @@
 #include <rex/graphics/command_processor.h>
 #include <rex/string/buffer.h>
 #include <rex/logging.h>
+#include <rex/cvar.h>
 #include <bit>
 #include <cstring>
 
@@ -97,6 +98,14 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
 bool NativeCommandProcessor::SetupContext() {
   if(!CommandProcessor::SetupContext())return false;
   std::string error;if(!service_||!service_->backend.Ready(error))return Fail(error);
+  // The desktop cache defaults (384/768 MiB, 30 seconds) can exhaust native
+  // surface storage before any sampled images become eligible for eviction.
+  // Leave headroom for live EDRAM targets and GPU packets. The common cache
+  // still evicts only images whose last guest submission has completed.
+  if(!cvar::SetFlagByName("texture_cache_memory_limit_soft","128")||
+     !cvar::SetFlagByName("texture_cache_memory_limit_hard","256")||
+     !cvar::SetFlagByName("texture_cache_memory_limit_soft_lifetime","2"))
+    return Fail("native texture-cache budget configuration failed");
   next_=[this]{return service_->Next();};caps_=service_->backend.GetDeviceCapabilities();
   Translator::Features features(false);features.spirv_version=spv::Spv_1_5;
   features.max_storage_buffer_range=caps_.max_buffer_length>=512ull<<20?512u<<20:256u<<20;
@@ -114,6 +123,7 @@ bool NativeCommandProcessor::SetupContext() {
   swap_fs_={next_(),Stage::Fragment,"swap_fragment",{},kSwapFragment,{{ArgumentKind::Texture,0,1,0,1,TextureKind::TwoDArray},{ArgumentKind::Buffer,0,1,2576,16}}};
   swap_pipeline_.id=next_();swap_pipeline_.vertex=swap_vs_.id;swap_pipeline_.fragment=swap_fs_.id;swap_pipeline_.colors[0]=Format::RGBA8;
   REXLOG_INFO("Native Metal guest GPU active: {} shared-memory chunks, original resolution, no Vulkan command submission",chunks.size());
+  REXLOG_INFO("Native Metal resource policy: textures 128/256 MiB, soft lifetime 2 s; surfaces 768 MiB; retire unowned EDRAM targets after submission");
   return true;
 }
 void NativeCommandProcessor::ShutdownContext() {
@@ -137,7 +147,10 @@ bool NativeCommandProcessor::Flush(std::string& error) {
   shared_->EndFrame(accepted);textures_->EndNativeFrame();primitives_->EndNativeFrame();
   // Keep texture LRU retirement bounded to completed guest work. Waiting is
   // avoided in the draw path; texture owner references protect pending packets.
-  if(accepted)textures_->CompletedSubmissionUpdated(guest_completed_->load());
+  if(accepted) {
+    textures_->CompletedSubmissionUpdated(guest_completed_->load());
+    targets_->ClearCache();
+  }
   if(!accepted)Fail(error);return accepted;
 }
 gfx::Shader* NativeCommandProcessor::LoadShader(gfx::xenos::ShaderType type,uint32_t,const uint32_t* words,uint32_t count) {
@@ -288,6 +301,10 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
   Pass pass;pass.width=width;pass.height=height;pass.colors[0]=Attachment{{image.id},Load::Discard};Draw draw;draw.pipeline=swap_pipeline_.id;draw.vertices=3;draw.viewport={0,0,double(width),double(height),0,1};draw.scissor={0,0,width,height};
   draw.bindings[1].textures={{0,source}};draw.bindings[1].buffers={{0,{constants.id,0,sizeof(gamma)}}};pass.commands.push_back(std::move(draw));AppendPass(*frame_,std::move(pass));
   if(!Flush(error)) {Fail(error);return;}
+  if((output_index_%120)==0) {
+    auto stats=service_->backend.Stats();
+    REXLOG_INFO("Native Metal surface storage: {} MiB; guest submissions {}",stats.surface_bytes>>20,submission_);
+  }
   if(auto* presenter=graphics_system_->presenter())presenter->RefreshGuestOutput(width,height,width,height,[image](ui::Presenter::GuestOutputRefreshContext& c) {
     auto& context=static_cast<NativeRefreshContext&>(c);context.output=image;context.SetIs8bpc(true);return true;
   });

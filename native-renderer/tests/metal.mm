@@ -38,6 +38,38 @@ int main(){@autoreleasepool {
     Check(backend.Stats().avoided_bindings>=3);Done("native draw, reflected constants and redundant binding reuse");
   }
   {
+    uint64_t unit;
+    {MetalBackend probe;Submit(probe,Triangle());unit=probe.Stats().surface_bytes;Check(unit>0);}
+    BackendOptions options;options.surface_budget=128*unit;MetalBackend backend(options);
+    std::vector<Surface> retained;Frame first;first.sequence=1;
+    for(uint64_t id=1;id<=128;++id) {
+      auto image=Target(id);first.surfaces.push_back(image);
+      if(id<=64)retained.push_back(std::move(image));
+    }
+    first.commands.push_back(ColorPass(1,{1,0,0,1}));Submit(backend,std::move(first));
+    Check(backend.Stats().surface_bytes==128*unit);
+    // Incremental sweeping visits the first 64 live owners. Pressure must find
+    // the expired second half rather than rejecting this new target.
+    Frame second;second.sequence=2;second.surfaces={retained[0],Target(129)};
+    second.commands.push_back(ColorPass(129,{0,1,0,1}));Submit(backend,std::move(second));
+    Check(backend.Stats().surface_bytes==65*unit);
+    Pixel(backend,View(1),8,8,{255,0,0,255});Pixel(backend,View(129),8,8,{0,255,0,255});
+    Done("surface pressure reclaims expired entries beyond 64 while preserving live pixels");
+  }
+  {
+    uint64_t unit;
+    {MetalBackend probe;Submit(probe,Triangle());unit=probe.Stats().surface_bytes;}
+    BackendOptions options;options.surface_budget=2*unit;MetalBackend backend(options);
+    auto retained=Target(1),other=Target(2);Frame first;first.sequence=1;first.surfaces={retained,other};
+    first.commands.push_back(ColorPass(1,{1,0,0,1}));Submit(backend,std::move(first));
+    Frame rejected;rejected.sequence=2;rejected.surfaces={Target(3)};
+    rejected.commands.push_back(ColorPass(3,{0,1,0,1}));
+    Check(!backend.Submit(std::make_shared<const Frame>(std::move(rejected)),{},failure));
+    Check(failure.find("Native surface budget exhausted: live=")==0);
+    Check(backend.Drain(std::chrono::seconds(1),failure));Pixel(backend,View(1),8,8,{255,0,0,255});
+    Done("live images remain protected and the surface budget remains bounded");
+  }
+  {
     MetalBackend backend;Frame f;f.sequence=1;f.surfaces={Target(1)};auto pass=ColorPass(1,{0,0,1,1});
     RectClear clear;clear.rectangle={4,4,8,8};clear.colors=1;clear.color[0]={1,0,0,1};pass.commands.emplace_back(clear);f.commands.emplace_back(pass);
     Submit(backend,std::move(f));Pixel(backend,View(1),5,5,{255,0,0,255});Pixel(backend,View(1),1,1,{0,0,255,255});Done("partial clear preserves the surrounding target");

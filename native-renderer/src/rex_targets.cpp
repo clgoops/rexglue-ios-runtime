@@ -8,6 +8,15 @@ namespace gfx=rex::graphics;
 RexRenderTargets::RexRenderTargets(const gfx::RegisterFile& regs,const memory::Memory& memory,
     std::function<Identity()> next,uint32_t sx,uint32_t sy):gfx::RenderTargetCache(regs,memory,sx,sy),next_id_(std::move(next)) {}
 RexRenderTargets::~RexRenderTargets() {ShutdownCommon();}
+void RexRenderTargets::ClearCache() {
+  // Native packets own their images through queue completion. After recording
+  // has ended, the SDK can drop targets which no longer own any EDRAM tiles.
+  // Its pruning also retains both unorm24 and float24 host-depth owners.
+  // Invalidate accumulated bindings before pruning: the next Update must not
+  // dereference a cached pointer to an image removed by the common cache.
+  ResetAccumulatedRenderTargets();
+  gfx::RenderTargetCache::ClearCache();
+}
 void RexRenderTargets::Initialize(TransferEncoder encoder) {
   if(initialized_)return;
   if(encoder)encode_=std::move(encoder);

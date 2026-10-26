@@ -8,7 +8,7 @@
 
 namespace rex::native {
 namespace {
-BackendOptions Options() {BackendOptions o;o.mutable_buffer_budget=768ull<<20;o.letterbox=REXCVAR_GET(present_letterbox);return o;}
+BackendOptions Options() {BackendOptions o;o.surface_budget=768ull<<20;o.mutable_buffer_budget=768ull<<20;o.letterbox=REXCVAR_GET(present_letterbox);return o;}
 Surface Target(NativeService& service,uint32_t w,uint32_t h) {
   Surface s;s.id=service.Next();s.width=w;s.height=h;s.format=Format::RGBA8;s.renderable=true;
   s.owner=std::make_shared<const Identity>(s.id);return s;
