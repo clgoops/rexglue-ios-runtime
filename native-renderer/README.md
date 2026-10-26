@@ -46,3 +46,11 @@ Build the isolated module with CMake 3.25+ and C++23. Set
 The live frontend also requires the runtime patches that define the app's frame
 metrics/performance ABI. `tools/connect-native-sdk.py` in the runtime package
 links this module to the SDK's actual `rexgpu-xenos` target.
+
+The UI upload fix is validated in Apple run 40253231180, and the complete iOS
+runtime built in run 40253234741 (source 798e458). The actual ImmediateDrawer,
+SDK base methods and packed vertex/index data now run in a headless composition
+test: first atlas upload, cached second frame and white fallback pass 33 checks
+with real Metal pixels. Restoring a zero image pitch reproduces frame rejection.
+Optional UI rejection no longer immediately stops guest presentation. Device
+execution of the updated game still requires confirmation.
