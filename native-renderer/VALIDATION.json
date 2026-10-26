@@ -1,6 +1,6 @@
 {
-  "implementation_commit": "798e4584e5b3de0e3c3f730bd7d24ceccbfbdef0",
-  "renderer_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40253231180",
+  "implementation_commit": "70c416a4509bf2c7092ebbb43a129ddf27b38792",
+  "renderer_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40292417303",
   "cpu_frame_checks": 75,
   "cpu_binding_checks": 32,
   "cpu_rex_frontend_checks": 4185,
@@ -8,15 +8,15 @@
   "edram_transfer_shader_variants_converted": 1836,
   "ios_metal_host_modules_compiled": 96,
   "production_swap_ui_shaders_compiled": 4,
-  "native_gpu_cases": 19,
-  "native_gpu_checks": 415,
+  "native_gpu_cases": 21,
+  "native_gpu_checks": 446,
   "frame_asan_ubsan": "passed",
   "gpu_target_edram_texture_round_trip": "passed",
   "gpu_attachmentless_fragment_memexport": "passed",
   "native_target_bridge_compiled_for_ios_arm64": true,
-  "native_metal_backend_dylib_sha256": "125b20d8c0f135957d5db3af4a2369547ef1ab1eb221670da094bc2ae3e82bc0",
+  "native_metal_backend_dylib_sha256": "a127e5b3d3904cee4cbef8c02a98a2422818f57ff3156ccbca2a3f3f328b53b4",
   "live_frontend_implemented": true,
-  "game_runtime_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40253234741",
+  "game_runtime_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40292423829",
   "device_execution_verified": false,
   "blur_performance_improvement_measured": false,
   "installable_ipa_produced_by_this_stage": true,
@@ -32,21 +32,29 @@
   "runtime_libraries": [
     {
       "name": "librexruntime.dylib",
-      "sha256": "cfaf3ff41bc62016ccb265226ca11db20081b209f27d842f1ec5be49d9e0c7c9",
+      "sha256": "02248b635e2c38921662a3ba7a52135803c995d2fe3bb60876a24624220740ef",
       "bytes": 9159328
     },
     {
       "name": "librexgpu-xenos.dylib",
-      "sha256": "f5623b292e50395d694f78ddeee8483abce8829ee14a446b53c752118d4c7ec9",
-      "bytes": 14335816
+      "sha256": "98dba4cb29f9c68279f50f1362751aea1c1e26d6081c4bfabd4dfb99531aa142",
+      "bytes": 14355200
     },
     {
       "name": "libMoltenVK.dylib",
-      "sha256": "aa142dad5b653b88025e0b6cb5020e5f52180bb5516644b6f7a1af81717086a8",
+      "sha256": "024e3bad2d689d39abb106f2eba83e09f9e851da802a4454f34037c49431ed2c",
       "bytes": 4511560
     }
   ],
   "production_ui_drawer_gpu_checks": 33,
   "ui_texture_image_pitch_regression": "passed",
-  "rejected_ui_packet_does_not_poison_backend": "passed"
+  "rejected_ui_packet_does_not_poison_backend": "passed",
+  "surface_pressure_reclaims_expired_owners": "passed",
+  "surface_pressure_preserves_live_pixels": "passed",
+  "native_surface_budget_mib": 768,
+  "sampled_texture_soft_hard_mib": [
+    128,
+    256
+  ],
+  "sampled_texture_soft_lifetime_seconds": 2
 }

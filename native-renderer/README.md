@@ -65,3 +65,9 @@ expired-owner sweep and bounded wait for older GPU packets precede a budget
 rejection. Live images are never discarded to satisfy the cap. GPU regression
 cases exercise pressure beyond the incremental scan and preservation of live
 pixels. Their results for this revision must be checked in VALIDATION.json.
+
+The surface-retirement revision (source 70c416a) passed Apple renderer run
+40292417303: 21 native GPU cases / 446 checks, including full pressure scanning
+and live-image preservation, plus all 33 production UI checks. Full native iOS
+runtime run 40292423829 succeeded. These results do not establish a device FPS
+gain; the replacement game package requires an iPhone test.
