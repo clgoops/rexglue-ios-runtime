@@ -1,22 +1,22 @@
 {
-  "implementation_commit": "70c416a4509bf2c7092ebbb43a129ddf27b38792",
-  "renderer_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40292417303",
-  "cpu_frame_checks": 75,
+  "implementation_commit": "b3e8d070a0ecf41154a33971898c456f0da75cfd",
+  "renderer_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40302198609",
+  "cpu_frame_checks": 91,
   "cpu_binding_checks": 32,
   "cpu_rex_frontend_checks": 4185,
   "actual_translator_modules": 27,
   "edram_transfer_shader_variants_converted": 1836,
   "ios_metal_host_modules_compiled": 96,
   "production_swap_ui_shaders_compiled": 4,
-  "native_gpu_cases": 21,
-  "native_gpu_checks": 446,
+  "native_gpu_cases": 32,
+  "native_gpu_checks": 584,
   "frame_asan_ubsan": "passed",
   "gpu_target_edram_texture_round_trip": "passed",
   "gpu_attachmentless_fragment_memexport": "passed",
   "native_target_bridge_compiled_for_ios_arm64": true,
-  "native_metal_backend_dylib_sha256": "a127e5b3d3904cee4cbef8c02a98a2422818f57ff3156ccbca2a3f3f328b53b4",
+  "native_metal_backend_dylib_sha256": "2f08a593daff7d9d7e3f8052c38f9215c970183c4f31af03158f41bd74287162",
   "live_frontend_implemented": true,
-  "game_runtime_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40292423829",
+  "game_runtime_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40302207357",
   "device_execution_verified": false,
   "blur_performance_improvement_measured": false,
   "installable_ipa_produced_by_this_stage": true,
@@ -32,17 +32,17 @@
   "runtime_libraries": [
     {
       "name": "librexruntime.dylib",
-      "sha256": "02248b635e2c38921662a3ba7a52135803c995d2fe3bb60876a24624220740ef",
+      "sha256": "e0f6581d94263152dc485e57fa154f731b403fa20bba924b6ec0591124902da3",
       "bytes": 9159328
     },
     {
       "name": "librexgpu-xenos.dylib",
-      "sha256": "98dba4cb29f9c68279f50f1362751aea1c1e26d6081c4bfabd4dfb99531aa142",
-      "bytes": 14355200
+      "sha256": "b1a5be0da8ddfc6632acb66cc1a36e7c5c87731d47a3b03846da4171d84e0cc1",
+      "bytes": 14404728
     },
     {
       "name": "libMoltenVK.dylib",
-      "sha256": "024e3bad2d689d39abb106f2eba83e09f9e851da802a4454f34037c49431ed2c",
+      "sha256": "d81e6a6af2e019c304196743fe28d3367f10b0712d2025483858af568cd93112",
       "bytes": 4511560
     }
   ],
@@ -51,10 +51,18 @@
   "rejected_ui_packet_does_not_poison_backend": "passed",
   "surface_pressure_reclaims_expired_owners": "passed",
   "surface_pressure_preserves_live_pixels": "passed",
-  "native_surface_budget_mib": 768,
+  "native_surface_budget_mib": 1280,
   "sampled_texture_soft_hard_mib": [
-    128,
-    256
+    384,
+    768
   ],
-  "sampled_texture_soft_lifetime_seconds": 2
+  "sampled_texture_soft_lifetime_seconds": 30,
+  "render_target_reuse_pool_mib": 128,
+  "production_qualification_shaders_compiled": 5,
+  "upload_batching_host_gpu_validation": "unavailable: Apple Paravirtual GPU rejects render barriers",
+  "upload_probe_fixture_pixels": "passed with conventional uploads",
+  "upload_batching_runtime_activation": "physical Apple9+; isolated vertex/index/4x MSAA pixel qualification required",
+  "cropped_area_ms_baseline": 32.536,
+  "cropped_area_ms_reduced": 23.5652,
+  "cropped_area_benchmark_scope": "synthetic virtual-GPU workload; not a title FPS result"
 }

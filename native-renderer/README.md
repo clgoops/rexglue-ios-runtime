@@ -72,7 +72,7 @@ and live-image preservation, plus all 33 production UI checks. Full native iOS
 runtime run 40292423829 succeeded. These results do not establish a device FPS
 gain; the replacement game package requires an iPhone test.
 
-The next revision keeps a bounded 128 MiB exact-key surface reuse pool to avoid
+The current revision keeps a bounded 128 MiB exact-key surface reuse pool to avoid
 reallocating targets that briefly lose EDRAM ownership. Compatible passes can
 keep their attachments in one encoder across aligned CPU buffer uploads. The
 upload uses a rasterization-disabled vertex copy with vertex-origin memory
@@ -81,9 +81,13 @@ unaligned copies and incompatible attachment states retain encoder boundaries.
 Render extents follow actual scissors and partial clears, preserving full
 attachment clears. Tests cover old/new vertex values, fixed-function index
 fetch, fragment-hazard fallback, 1x/2x/4x MSAA and surrounding pixel preservation.
-A 128-pass synthetic workload reports GPU windows with batching off/on; it is
-not a captured game workload or an iPhone FPS prediction. Validation of this
-revision is pending until its Apple workflow results are recorded.
+A 128-pass synthetic workload reports GPU windows with render-area reduction
+off/on; it is not a captured game workload or an iPhone FPS prediction.
+Apple run 40302198609 passed 91 frame contracts, 32 GPU cases / 584 checks,
+33 production UI checks and iOS ARM64 compilation. All nine production
+swap/UI/upload qualification shaders compiled for iOS. Full native runtime
+run 40302207357 succeeded, source b3e8d07. Optimized upload batching remains
+unvalidated on the hosted GPU and must qualify on the actual device.
 
 Upload batching is disabled by default. Activation requires a physical Apple9+
 GPU and three isolated on-device pixel checks: old/new vertex data, hardware
