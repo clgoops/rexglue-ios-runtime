@@ -99,13 +99,13 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
 bool NativeCommandProcessor::SetupContext() {
   if(!CommandProcessor::SetupContext())return false;
   std::string error;if(!service_||!service_->backend.Ready(error))return Fail(error);
-  // The desktop cache defaults (384/768 MiB, 30 seconds) can exhaust native
-  // surface storage before any sampled images become eligible for eviction.
-  // Leave headroom for live EDRAM targets and GPU packets. The common cache
-  // still evicts only images whose last guest submission has completed.
-  if(!cvar::SetFlagByName("texture_cache_memory_limit_soft","128")||
-     !cvar::SetFlagByName("texture_cache_memory_limit_hard","256")||
-     !cvar::SetFlagByName("texture_cache_memory_limit_soft_lifetime","2"))
+  // Preserve the SDK's working-set cache limits. The 128/256 MiB workaround
+  // can repeatedly evict decompressed textures used later in a guest frame.
+  // The native surface cap now includes headroom for this cache, EDRAM and
+  // completion-owned packets; target retirement/reuse bounds stale storage.
+  if(!cvar::SetFlagByName("texture_cache_memory_limit_soft","384")||
+     !cvar::SetFlagByName("texture_cache_memory_limit_hard","768")||
+     !cvar::SetFlagByName("texture_cache_memory_limit_soft_lifetime","30"))
     return Fail("native texture-cache budget configuration failed");
   next_=[this]{return service_->Next();};caps_=service_->backend.GetDeviceCapabilities();
   Translator::Features features(false);features.spirv_version=spv::Spv_1_5;
@@ -124,7 +124,7 @@ bool NativeCommandProcessor::SetupContext() {
   swap_fs_={next_(),Stage::Fragment,"swap_fragment",{},kSwapFragment,{{ArgumentKind::Texture,0,1,0,1,TextureKind::TwoDArray},{ArgumentKind::Buffer,0,1,2576,16}}};
   swap_pipeline_.id=next_();swap_pipeline_.vertex=swap_vs_.id;swap_pipeline_.fragment=swap_fs_.id;swap_pipeline_.colors[0]=Format::RGBA8;
   REXLOG_INFO("Native Metal guest GPU active: {} shared-memory chunks, original resolution, no Vulkan command submission",chunks.size());
-  REXLOG_INFO("Native Metal resource policy: textures 128/256 MiB, soft lifetime 2 s; surfaces 768 MiB; retire targets at guest swaps with a bounded 128 MiB exact-key reuse pool");
+  REXLOG_INFO("Native Metal resource policy: textures 384/768 MiB, soft lifetime 30 s; surfaces 1280 MiB; retire targets at guest swaps with a bounded 128 MiB exact-key reuse pool");
   std::string qualification;bool batching=service_->backend.QualifyUploadBatching(qualification);
   REXLOG_INFO("Native Metal batching: aligned buffer uploads within compatible passes; enabled={} qualification={}",batching,qualification);
   return true;
@@ -154,7 +154,7 @@ bool NativeCommandProcessor::Flush(std::string& error) {
     textures_->CompletedSubmissionUpdated(guest_completed_->load());
     // Keep targets warm across partial submissions. A bounded exact-key pool
     // also retains recently unowned images across actual guest frame pruning.
-    if(service_->backend.Stats().surface_bytes>(640ull<<20)) {
+    if(service_->backend.Stats().surface_bytes>(1152ull<<20)) {
       targets_->DropReusableSurfaces();targets_->ClearCache();
     }
   }

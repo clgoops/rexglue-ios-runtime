@@ -45,7 +45,7 @@ jobs:
           ./native-host/native-frame-tests | tee native-frame-tests.log
           ./native-host/native-spirv-tests | tee native-spirv-tests.log
           ./native-host/native-rex-shader-tests actual-translator-msl | tee native-rex-shader-tests.log
-          xcrun clang++ -std=c++23 -O1 -g -fsanitize=address,undefined -Inative-renderer/include native-renderer/src/frame.cpp native-renderer/tests/frame.cpp -o native-contract-sanitizers
+          xcrun clang++ -std=c++23 -O1 -g -fsanitize=address,undefined -Inative-renderer/include native-renderer/src/frame.cpp native-renderer/src/upload_probe.cpp native-renderer/tests/frame.cpp -o native-contract-sanitizers
           ./native-contract-sanitizers | tee native-contract-sanitizers.log
       - name: Compile converted SDK kernels and actual translator output with Apple Metal
         run: |

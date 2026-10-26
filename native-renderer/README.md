@@ -56,8 +56,8 @@ Optional UI rejection no longer immediately stops guest presentation. Device
 execution of the updated game still requires confirmation.
 
 Native resource admission now coordinates the sampled texture cache with the
-surface budget: 128/256 MiB sampled-texture limits with a two-second soft
-lifetime, and 768 MiB total native surfaces. At guest swaps or a surface high-water mark,
+surface budget: 384/768 MiB sampled-texture limits with the SDK
+30-second soft lifetime, and 1280 MiB total native surfaces. At guest swaps or a surface high-water mark,
 the common SDK prunes render targets which no longer own EDRAM data, retaining
 both host-depth precision owners. Accumulated bindings are invalidated before
 pruning; immutable packets retain image owners until GPU completion. A full
@@ -92,3 +92,11 @@ hosted Apple Paravirtual GPU rejects both render-barrier APIs on macOS 15/26;
 its tests must report batching unavailable, not claim an optimized-path result.
 The render-area benchmark uses conventional uploads in both modes, isolating
 attachment extent reduction without requiring unsupported barriers.
+
+The SDK sampled-texture working-set limits are restored after the smaller
+128/256 MiB workaround. Total surface storage remains bounded at 1280 MiB,
+with pool release/ownership pruning at 1152 MiB and completion-safe reclamation.
+The 128-pass cropped-area test on the hosted virtual GPU measured 20.68 ms
+versus 20.24 ms; this is not evidence of a useful game speedup. Device results
+must establish the effect of texture retention, surface reuse and any upload
+batching which passes the physical-GPU qualification.
