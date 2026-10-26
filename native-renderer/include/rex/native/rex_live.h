@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include "metal_backend.h"
+#include "rex_ui.h"
 #include <rex/graphics/graphics_system.h>
 #include <atomic>
 #include <map>
@@ -32,12 +33,6 @@ class NativeRefreshContext:public ui::Presenter::GuestOutputRefreshContext {
  public:
   NativeRefreshContext(bool& eight,Surface& output):GuestOutputRefreshContext(eight),output(output) {}
   Surface& output;
-};
-class NativeUIContext:public ui::UIDrawContext {
- public:
-  NativeUIContext(ui::Presenter& p,Frame& f,Pass& pass):UIDrawContext(p,pass.width,pass.height),frame(f),pass(pass) {}
-  Frame& frame;
-  Pass& pass;
 };
 class NativeGraphicsSystem final:public graphics::GraphicsSystem {
  public:

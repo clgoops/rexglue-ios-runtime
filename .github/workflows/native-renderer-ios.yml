@@ -61,6 +61,10 @@ jobs:
           status=${PIPESTATUS[0]}
           if [ "$status" != 77 ] && [ "$status" != 0 ]; then exit "$status"; fi
           python3 -c 'import json,sys;json.dump({"gpu_available":sys.argv[1]=="0","pixel_validation":"passed" if sys.argv[1]=="0" else "unavailable"},open("gpu-rex-result.json","w"))' "$status"
+          MTL_DEBUG_LAYER=1 ./native-host/native-ui-tests 2>&1 | tee native-ui-tests.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" != 77 ] && [ "$status" != 0 ]; then exit "$status"; fi
+          python3 -c 'import json,sys;json.dump({"gpu_available":sys.argv[1]=="0","pixel_validation":"passed" if sys.argv[1]=="0" else "unavailable"},open("gpu-ui-result.json","w"))' "$status"
       - name: Compile the actual backend for iOS ARM64
         run: |
           set -euo pipefail
@@ -69,7 +73,7 @@ jobs:
           xcrun --sdk iphoneos clang++ -std=c++23 -fobjc-arc -arch arm64 -miphoneos-version-min=18.0 -Inative-renderer/include -c native-renderer/tests/metal.mm -o native-metal-tests-ios.o
           mkdir -p native-artifact
           cp native-ios/librex-native-metal.dylib native-artifact/
-          cp native-ios/librex-native-frame.a native-ios/librex-native-spirv.a native-ios/librex-native-rex-adapters.a native-artifact/
+          cp native-ios/librex-native-frame.a native-ios/librex-native-spirv.a native-ios/librex-native-rex-adapters.a native-ios/librex-native-ui.a native-artifact/
           cp native-ios/spirv-cross/libspirv-cross-core.a native-ios/spirv-cross/libspirv-cross-glsl.a native-ios/spirv-cross/libspirv-cross-msl.a native-artifact/
           cp spirv-cross-src/LICENSE native-artifact/SPIRV-Cross-LICENSE
           otool -L native-artifact/librex-native-metal.dylib > native-artifact/load-commands.txt
@@ -91,6 +95,8 @@ jobs:
             native-metal-spirv-tests.log
             gpu-spirv-result.json
             native-metal-rex-tests.log
+            native-ui-tests.log
+            gpu-ui-result.json
             gpu-rex-result.json
             native-contract-sanitizers.log
             native-metal-tests.log

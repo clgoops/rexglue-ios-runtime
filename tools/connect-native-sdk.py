@@ -35,7 +35,7 @@ set(REX_NATIVE_SPIRV_CROSS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../spirv-cross-src" 
 add_subdirectory("../native-renderer" "native-renderer")
 target_link_libraries(rex-native-live PUBLIC rexruntime rex-native-metal)
 target_link_libraries(rexgpu-xenos PRIVATE rex-native-live)
-foreach(native_target rex-native-frame rex-native-spirv rex-native-metal rex-native-rex-adapters rex-native-live)
+foreach(native_target rex-native-frame rex-native-spirv rex-native-metal rex-native-rex-adapters rex-native-ui rex-native-live)
   set_target_properties(${native_target} PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 endforeach()
 ''')
