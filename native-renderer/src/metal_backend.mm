@@ -8,6 +8,7 @@
 #import <TargetConditionals.h>
 #include "rex/native/metal_backend.h"
 #include "rex/native/lru.h"
+#include "rex/native/upload_probe.h"
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -20,6 +21,9 @@
 
 namespace rex::native {
 namespace {
+constexpr const char* kUploadVertex=R"(#include <metal_stdlib>
+using namespace metal;vertex void upload_vertex(uint i[[vertex_id]],const device uint4* src[[buffer(0)]],device uint4* dst[[buffer(1)]]){dst[i]=src[i];}
+)";
 bool Fail(std::string& error,const char* text){error=text;return false;}
 std::string DescribeError(NSError* e){return e?std::string(e.localizedDescription.UTF8String):"Metal returned no object";}
 MTLPixelFormat Pixel(Format f) {
@@ -574,9 +578,8 @@ struct MetalBackend::Impl {
   bool InlineUpload(id<MTLRenderCommandEncoder> encoder,const BufferUpload& upload,const Pass& pass,
       EncoderBindings& bindings,std::shared_ptr<FrameLease> lease,std::string& error){
     if(!upload_vertex) {
-      const char* source="#include <metal_stdlib>\nusing namespace metal;vertex void upload_vertex(uint i[[vertex_id]],const device uint4* src[[buffer(0)]],device uint4* dst[[buffer(1)]]){dst[i]=src[i];}";
       auto options=[MTLCompileOptions new];NSError* failure=nil;
-      auto library=[device newLibraryWithSource:[NSString stringWithUTF8String:source] options:options error:&failure];
+      auto library=[device newLibraryWithSource:[NSString stringWithUTF8String:kUploadVertex] options:options error:&failure];
       if(!library){error=DescribeError(failure);return false;}upload_vertex=[library newFunctionWithName:@"upload_vertex"];
       if(!upload_vertex)return Fail(error,"Native in-pass upload vertex function is missing");
     }
@@ -811,6 +814,27 @@ bool MetalBackend::SaveBinaryArchive(std::string& error){
   impl_->archive_dirty=false;return true;
 }
 void MetalBackend::SetTimingEnabled(bool enabled) {impl_->options.timing=enabled;}
+bool MetalBackend::QualifyUploadBatching(std::string& detail) {@autoreleasepool {
+  impl_->options.inline_buffer_uploads=false;
+  // Hosted paravirtual GPUs advertise families but reject render barriers.
+  // Keep them, and older/unqualified hardware, on the conventional path.
+  if(![impl_->device supportsFamily:MTLGPUFamilyApple9]||
+     [impl_->device.name rangeOfString:@"paravirtual" options:NSCaseInsensitiveSearch].location!=NSNotFound) {
+    detail="unavailable on this GPU; conventional uploads retained";return false;
+  }
+  @try {
+    for(auto test:std::array<std::pair<bool,uint32_t>,3>{{{false,1},{false,4},{true,1}}}) {
+      BackendOptions options;options.inline_buffer_uploads=true;options.surface_budget=1ull<<20;options.maximum_frames=1;
+      MetalBackend probe(options);auto frame=std::make_shared<const Frame>(UploadProbe(test.first,test.second));
+      if(!probe.Submit(frame,{},detail)||!probe.Drain(std::chrono::seconds(5),detail))return false;
+      auto pixels=probe.ReadRGBA8(*frame->output,detail);
+      if(!CheckUploadProbe(pixels,test.first)||probe.Stats().inline_uploads!=1) {
+        detail="pixel ordering check failed; conventional uploads retained";return false;
+      }
+    }
+  } @catch(NSException* exception) {detail=exception.reason.UTF8String;return false;}
+  impl_->options.inline_buffer_uploads=true;detail="passed vertex, index and 4x MSAA pixel ordering checks";return true;
+}}
 Capabilities MetalBackend::GetDeviceCapabilities() const {
   Capabilities c;c.max_buffer_length=impl_->device.maxBufferLength;
   c.float32_filtering=impl_->device.supports32BitFloatFiltering;

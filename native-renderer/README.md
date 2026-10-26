@@ -84,3 +84,11 @@ fetch, fragment-hazard fallback, 1x/2x/4x MSAA and surrounding pixel preservatio
 A 128-pass synthetic workload reports GPU windows with batching off/on; it is
 not a captured game workload or an iPhone FPS prediction. Validation of this
 revision is pending until its Apple workflow results are recorded.
+
+Upload batching is disabled by default. Activation requires a physical Apple9+
+GPU and three isolated on-device pixel checks: old/new vertex data, hardware
+index fetch and 4x MSAA. A failure leaves conventional uploads active. The
+hosted Apple Paravirtual GPU rejects both render-barrier APIs on macOS 15/26;
+its tests must report batching unavailable, not claim an optimized-path result.
+The render-area benchmark uses conventional uploads in both modes, isolating
+attachment extent reduction without requiring unsupported barriers.

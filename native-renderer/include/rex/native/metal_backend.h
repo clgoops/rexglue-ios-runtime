@@ -17,7 +17,7 @@ struct BackendOptions {
   // Timing is opt-in. Normal rendering does not create counters or read clocks.
   bool timing=false;
   bool letterbox=true;
-  bool inline_buffer_uploads=true,tight_render_area=true;
+  bool inline_buffer_uploads=false,tight_render_area=true;
 };
 struct Completion {
   uint64_t sequence=0;
@@ -51,6 +51,9 @@ class MetalBackend {
   BackendStats Stats() const;
   Capabilities GetDeviceCapabilities() const;
   void SetTimingEnabled(bool enabled);
+  // Production activation requires a physical Apple9+ GPU and isolated pixel
+  // checks. A failed/unavailable probe leaves the conventional path enabled.
+  bool QualifyUploadBatching(std::string& detail);
   std::vector<std::byte> ReadBuffer(const BufferView&,std::string& error);
   // Opaque CAMetalLayer owned by the UIKit host, passed without API types into
   // the frame contract. Null disables presentation. The layer and backend use

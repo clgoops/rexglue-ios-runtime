@@ -4,6 +4,7 @@
 #include "fixtures.h"
 #include "rex/native/metal_backend.h"
 #include "rex/native/surface_pool.h"
+#include "rex/native/upload_probe.h"
 #include <atomic>
 #include <algorithm>
 #include <iostream>
@@ -80,7 +81,7 @@ int main(){@autoreleasepool {
     Submit(backend,std::move(f));Pixel(backend,View(1),5,5,{255,0,0,255});Pixel(backend,View(1),1,1,{0,0,255,255});Done("partial clear preserves the surrounding target");
   }
   for(uint32_t samples:{1u,4u}) {
-    MetalBackend backend;auto f=Triangle(1,Target(1,Format::RGBA8,samples));f.buffers.clear();
+    MetalBackend backend;std::string detail;bool batching=backend.QualifyUploadBatching(detail);auto f=Triangle(1,Target(1,Format::RGBA8,samples));f.buffers.clear();
     f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
     f.shaders[0].arguments={{ArgumentKind::Buffer,0,1,16,16}};
     f.shaders[0].msl="#include <metal_stdlib>\nusing namespace metal;struct O{float4 p[[position]];float4 c;};vertex O vertex_main(uint i[[vertex_id]],const device float4& c[[buffer(0)]]){float2 p=float2((i<<1)&2,i&2);return O{float4(p*2-1,.5,1),c};}";
@@ -93,18 +94,19 @@ int main(){@autoreleasepool {
     if(samples>1){f.surfaces.push_back(Target(2));f.commands.push_back(Resolve{View(1),View(2),ResolveFilter::Average});f.output=View(2);}
     Submit(backend,std::move(f));const auto view=samples>1?View(2):View(1);
     Pixel(backend,view,4,8,{255,0,0,255});Pixel(backend,view,12,8,{0,255,0,255});
-    Check(backend.Stats().passes==1&&backend.Stats().inline_uploads==1);
-    Done(samples==1?"in-pass vertex upload preserves old/new draw values":"4x MSAA in-pass upload preserves old/new draw values");
+    Check(backend.Stats().passes==(batching?1:2)&&backend.Stats().inline_uploads==(batching?1:0));
+    if(!batching)std::cout<<"UPLOAD_BATCHING_UNAVAILABLE: "<<detail<<std::endl;
+    Done(samples==1?"ordered vertex upload preserves old/new draw values":"4x MSAA ordered upload preserves old/new draw values");
   }
   {
-    MetalBackend backend;auto f=Triangle();f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
+    MetalBackend backend;std::string detail;bool batching=backend.QualifyUploadBatching(detail);auto f=Triangle();f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
     auto& first=std::get<Pass>(f.commands[0]);auto& draw=std::get<Draw>(first.commands[0]);draw.indices=BufferView{Id(500),0,16};draw.index_bytes=4;draw.index_count=3;draw.vertices=0;draw.scissor={0,0,8,16};
     Pass second=first;second.colors[0]->load=Load::Load;auto& d=std::get<Draw>(second.commands[0]);d.scissor={8,0,8,16};
     f.buffers.push_back({Id(301),Data(std::array<float,4>{0,1,0,1}),true});d.bindings[1].buffers={{0,{Id(301),0,16}}};
     f.commands.insert(f.commands.begin(),BufferUpload{{Id(500),0,16},Data(std::array<uint32_t,4>{0,1,2,0})});
     f.commands.push_back(BufferUpload{{Id(500),0,16},Data(std::array<uint32_t,4>{})});f.commands.push_back(second);
     Submit(backend,std::move(f));Pixel(backend,View(1),4,8,{255,0,0,255});Pixel(backend,View(1),12,8,{0,0,0,255});
-    Check(backend.Stats().passes==1&&backend.Stats().inline_uploads==1);Done("in-pass upload synchronizes subsequent hardware index fetch");
+    Check(backend.Stats().passes==(batching?1:2)&&backend.Stats().inline_uploads==(batching?1:0));Done("ordered uploads synchronize subsequent hardware index fetch");
   }
   {
     MetalBackend backend;auto f=Triangle();f.buffers.clear();f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
@@ -133,12 +135,19 @@ int main(){@autoreleasepool {
     Pixel(backend,View(2),1,1,{0,255,0,255});Pixel(backend,View(2),12,12,{255,0,0,255});
     Check(backend.Stats().reduced_passes==1);Done(samples==2?"2x MSAA cropped pass preserves surrounding samples":"4x MSAA cropped pass preserves surrounding samples");
   }
+  for(auto test:std::array<std::pair<bool,uint32_t>,3>{{{false,1},{false,4},{true,1}}}) {
+    MetalBackend backend;std::string detail;bool batching=backend.QualifyUploadBatching(detail);
+    auto f=UploadProbe(test.first,test.second);const auto output=*f.output;Submit(backend,std::move(f));
+    Check(CheckUploadProbe(backend.ReadRGBA8(output,failure),test.first));
+    Check(backend.Stats().inline_uploads==(batching?1:0));
+    Done("production upload qualification fixture has correct full-frame pixels");
+  }
   {
     // A controlled workload isolates encoder/store-load overhead. It is not
     // a game benchmark, and its timing ratio is not a device FPS prediction.
     constexpr unsigned count=128,rounds=3;double elapsed[2]{};
     for(unsigned mode=0;mode<2;++mode) {
-      BackendOptions options;options.inline_buffer_uploads=bool(mode);options.tight_render_area=false;options.timing=true;MetalBackend backend(options);
+      BackendOptions options;options.inline_buffer_uploads=false;options.tight_render_area=bool(mode);options.timing=true;MetalBackend backend(options);
       Surface image=Target(1,Format::RGBA8,4);image.width=1280;image.height=720;auto f=Triangle(1,image);f.output.reset();
       f.buffer_storage={{Id(500),16,true,std::make_shared<const int>(500)}};
       auto first=std::get<Pass>(f.commands[0]);first.width=1280;first.height=720;f.commands={first};
@@ -150,10 +159,10 @@ int main(){@autoreleasepool {
         Check(backend.Drain(std::chrono::seconds(30),failure));Check(result.wait_for(std::chrono::seconds(5))==std::future_status::ready);
         auto c=result.get();Check(c.success&&c.timing_available);if(round)elapsed[mode]+=c.native_window_ms;
       }
-      Check(backend.Stats().passes==rounds*(mode?1:count));
+      Check(backend.Stats().passes==rounds*count);Check(backend.Stats().reduced_passes==rounds*(mode?count-1:0));
     }
-    std::cout<<"SYNTHETIC_UPLOAD_BATCH_GPU_MS baseline="<<elapsed[0]/2<<" batched="<<elapsed[1]/2<<std::endl;
-    Done("128-pass upload workload preserves ordering while using one render encoder");
+    std::cout<<"SYNTHETIC_RENDER_AREA_GPU_MS baseline="<<elapsed[0]/2<<" reduced="<<elapsed[1]/2<<std::endl;
+    Done("128-pass render-area workload preserves ordering with reduced attachment extents");
   }
   {
     MetalBackend backend;auto f=Triangle();f.pipelines[0].blend[0].write_mask=1;std::get<Pass>(f.commands[0]).colors[0]->color={0,0,1,1};

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "fixtures.h"
 #include "rex/native/surface_pool.h"
+#include "rex/native/upload_probe.h"
 #include "rex/native/lru.h"
 #include <iostream>
 #include <limits>
@@ -117,5 +118,6 @@ int main(){
     pool.Remember(3,c);require(!pool.Find(2)&&pool.Find(1)&&pool.Find(3)&&pool.bytes()==2048);
     pool.Clear();require(pool.bytes()==0&&!pool.Find(1)&&packet->owner==a.owner);
   }
+  require(Validate(UploadProbe(false,1),error));require(Validate(UploadProbe(false,4),error));require(Validate(UploadProbe(true,1),error));
   std::cout<<checks<<" native frame contracts passed\n";
 }

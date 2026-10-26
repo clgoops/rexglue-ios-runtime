@@ -125,7 +125,8 @@ bool NativeCommandProcessor::SetupContext() {
   swap_pipeline_.id=next_();swap_pipeline_.vertex=swap_vs_.id;swap_pipeline_.fragment=swap_fs_.id;swap_pipeline_.colors[0]=Format::RGBA8;
   REXLOG_INFO("Native Metal guest GPU active: {} shared-memory chunks, original resolution, no Vulkan command submission",chunks.size());
   REXLOG_INFO("Native Metal resource policy: textures 128/256 MiB, soft lifetime 2 s; surfaces 768 MiB; retire targets at guest swaps with a bounded 128 MiB exact-key reuse pool");
-  REXLOG_INFO("Native Metal batching: aligned buffer uploads within compatible passes; vertex-origin barriers only; tight scissor/clear render extents");
+  std::string qualification;bool batching=service_->backend.QualifyUploadBatching(qualification);
+  REXLOG_INFO("Native Metal batching: aligned buffer uploads within compatible passes; enabled={} qualification={}",batching,qualification);
   return true;
 }
 void NativeCommandProcessor::ShutdownContext() {
