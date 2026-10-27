@@ -104,3 +104,15 @@ The 128-pass cropped-area test on the hosted virtual GPU measured 20.68 ms
 versus 20.24 ms; this is not evidence of a useful game speedup. Device results
 must establish the effect of texture retention, surface reuse and any upload
 batching which passes the physical-GPU qualification.
+
+Sampled DXT textures now retain native BC1/2/3/4/5 storage when the Metal
+device reports `supportsBCTextureCompression` and the base image is an aligned
+2D, array or cube texture. Volume and irregular shapes use the decoded path.
+Cache accounting counts blocks per mip, including small packed mip tails.
+The actual SDK untile/endian loaders and the production staging planner are
+shared with the comparison tests. Apple renderer run 40491985015 passed all
+20 native-BC versus decoded pixel cases (762,015 checks with Metal validation),
+covering mipmaps, packed tails, arrays, cube faces, tiling and byte ordering.
+The larger DXT1 fixture uses about one-eighth of decoded logical texture storage;
+tiny BC4/5 mip tails can be larger than decoded tails because of fixed blocks.
+These storage/pixel results do not establish a game FPS improvement.
