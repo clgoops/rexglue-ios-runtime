@@ -33,7 +33,7 @@ struct BackendStats {
   uint64_t surface_allocations=0,inline_uploads=0,inline_upload_bytes=0;
   uint64_t reduced_passes=0,render_area_pixels=0,render_area_used_pixels=0;
 };
-struct Capabilities {uint64_t max_buffer_length=0;bool float32_filtering=false,packed_16bit_textures=false;};
+struct Capabilities {uint64_t max_buffer_length=0;bool float32_filtering=false,packed_16bit_textures=false,bc_texture_compression=false;};
 class MetalBackend {
  public:
   explicit MetalBackend(const BackendOptions& options={});

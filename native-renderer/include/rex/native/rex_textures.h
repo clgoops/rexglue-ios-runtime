@@ -10,20 +10,26 @@ class RexTextures final:public graphics::TextureCache {
   using Key=TextureKey;
   using LoadIndex=LoadShaderIndex;
   using LoadParams=LoadConstants;
+  using LoadInfo=LoadShaderInfo;
   struct HostFormat {LoadIndex load_shader=kLoadShaderIndexUnknown;Format format=Format::Invalid;bool block_compressed=false,linear_filterable=true;};
   struct HostFormatPair {HostFormat format_unsigned,format_signed;uint32_t swizzle=0;bool unsigned_signed_compatible=false;};
+  static uint64_t StorageBytes(const Surface&);
+  struct LoadStep {LoadParams constants;std::array<uint32_t,3> groups;bool base;};
+  struct LoadPlan {uint64_t size=0;std::vector<LoadStep> loads;std::vector<BufferToTexture> copies;};
+  struct LoadStats {uint64_t native_bc=0,uncompressed=0,staging_bytes=0;};
+  LoadStats load_stats() const {return stats_;}
+  static bool PlanLoad(Key,const graphics::texture_util::TextureGuestLayout&,const LoadInfo&,
+      HostFormat,bool base,bool mips,LoadPlan&,std::string&);
+  static const LoadInfo& LoadMetadata(LoadIndex index) {return GetLoadShaderInfo(index);}
   struct NativeTexture final:Texture {
     NativeTexture(RexTextures& c,Key k,Surface s):Texture(c,k),image(std::move(s)) {
-      const auto f=Describe(image.format);uint64_t bytes=0;
-      for(uint32_t level=0;level<image.levels;++level)bytes+=uint64_t(std::max(1u,image.width>>level))*
-        std::max(1u,image.height>>level)*std::max(1u,image.depth>>level)*image.layers*f.bytes;
-      SetHostMemoryUsage(bytes);
+      SetHostMemoryUsage(StorageBytes(image));
     }
     Surface image;
     std::optional<Surface> flat;
     uint64_t loaded=0,flat_loaded=UINT64_MAX;
   };
-  RexTextures(const graphics::RegisterFile&,RexSharedMemory&,std::function<Identity()>);
+  RexTextures(const graphics::RegisterFile&,RexSharedMemory&,std::function<Identity()>,bool native_bc=false);
   ~RexTextures() override;
   void BeginNativeFrame(Frame&,uint64_t submission,uint64_t completed);
   void EndNativeFrame();
@@ -31,7 +37,8 @@ class RexTextures final:public graphics::TextureCache {
   bool Active(uint32_t fetch,graphics::xenos::FetchOpDimension,bool is_signed,SurfaceView&,std::string&);
   bool Swap(SurfaceView&,uint32_t& swizzle,std::string&);
   bool faulted() const {return !failure_.empty();}
-  static HostFormatPair Formats(graphics::xenos::TextureFormat);
+  static HostFormatPair Formats(graphics::xenos::TextureFormat,bool native_bc=false);
+  static HostFormatPair Formats(Key,bool native_bc);
   static std::span<const uint32_t> LoadKernel(LoadIndex);
  protected:
   bool IsSignedVersionSeparateForFormat(Key) const override;
@@ -48,6 +55,8 @@ class RexTextures final:public graphics::TextureCache {
   RexSharedMemory& shared_;
   std::function<Identity()> next_;
   Frame* frame_=nullptr;
+  bool native_bc_=false;
+  LoadStats stats_{};
   std::string failure_;
   Lru<uint32_t,ConvertedShader> kernels_;
   std::array<std::optional<Surface>,3> nulls_;

@@ -838,6 +838,7 @@ bool MetalBackend::QualifyUploadBatching(std::string& detail) {@autoreleasepool 
 Capabilities MetalBackend::GetDeviceCapabilities() const {
   Capabilities c;c.max_buffer_length=impl_->device.maxBufferLength;
   c.float32_filtering=impl_->device.supports32BitFloatFiltering;
+  c.bc_texture_compression=impl_->device.supportsBCTextureCompression;
 #if TARGET_OS_IPHONE
   c.packed_16bit_textures=true;
 #endif

@@ -287,8 +287,9 @@ const RexTextures::HostFormatPair RexTextures::best_formats[64] = {
     // Not usable as a texture.
     {{kLoadShaderIndexUnknown}, {kLoadShaderIndexUnknown}, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
 };
-RexTextures::HostFormatPair RexTextures::Formats(xenos::TextureFormat f) {
+RexTextures::HostFormatPair RexTextures::Formats(xenos::TextureFormat f,bool native_bc) {
   auto p=best_formats[uint32_t(f)];
+  if(native_bc&&p.format_unsigned.block_compressed&&p.format_unsigned.format>=Format::BC1&&p.format_unsigned.format<=Format::BC7Srgb)return p;
   using F=xenos::TextureFormat;
   auto decoded=[&](LoadIndex index,Format format) {p.format_unsigned={index,format,false,true};p.format_signed={};p.unsigned_signed_compatible=false;};
   switch(f) {
@@ -313,5 +314,20 @@ RexTextures::HostFormatPair RexTextures::Formats(xenos::TextureFormat f) {
     p.swizzle=adjusted;
   }
   return p;
+}
+RexTextures::HostFormatPair RexTextures::Formats(Key key,bool native_bc) {
+  // Keep volume, 1D and irregular base dimensions on the decoded path.
+  // BC mip tails below 4x4 are legal within an aligned 2D/cube allocation.
+  const bool shape=(key.dimension==xenos::DataDimension::k2DOrStacked||key.dimension==xenos::DataDimension::kCube)&&
+    key.GetWidth()>=4&&key.GetHeight()>=4&&!(key.GetWidth()%4)&&!(key.GetHeight()%4);
+  return Formats(key.format,native_bc&&shape);
+}
+uint64_t RexTextures::StorageBytes(const Surface& image) {
+  const auto f=Describe(image.format);uint64_t bytes=0;
+  for(uint32_t level=0;level<image.levels;++level)bytes+=
+    uint64_t((std::max(1u,image.width>>level)+f.block_width-1)/f.block_width)*
+    ((std::max(1u,image.height>>level)+f.block_height-1)/f.block_height)*
+    std::max(1u,image.depth>>level)*image.layers*image.samples*f.bytes;
+  return bytes;
 }
 } // namespace rex::native

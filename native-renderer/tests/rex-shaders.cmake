@@ -1,6 +1,17 @@
 # Isolated translator service stubs are used only by this test executable.
 set(SDK "${REX_NATIVE_REXSDK_DIR}")
-add_executable(native-rex-shader-tests tests/rex-shaders.cpp
+# Compile the pinned SDK's exact read-only loader metadata without linking its
+# memory manager into the isolated tests. No replacement metadata is invented.
+file(READ "${SDK}/src/graphics/pipeline/texture/cache.cpp" TEXTURE_CACHE_SOURCE)
+string(REGEX MATCH "const TextureCache::LoadShaderInfo TextureCache::load_shader_info_\\[kLoadShaderCount\\] = \\{[^;]*\\};" TEXTURE_LOAD_INFO "${TEXTURE_CACHE_SOURCE}")
+if(NOT TEXTURE_LOAD_INFO)
+  message(FATAL_ERROR "Pinned texture load metadata was not found")
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/native-test-texture-info.cpp" "#include <rex/graphics/pipeline/texture/cache.h>\nnamespace rex::graphics {\n${TEXTURE_LOAD_INFO}\n}\n")
+add_executable(native-rex-shader-tests tests/rex-shaders.cpp tests/math-stubs.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/native-test-texture-info.cpp"
+  "${SDK}/src/graphics/pipeline/texture/util.cpp"
+  "${SDK}/src/graphics/pipeline/texture/info_formats.cpp"
   "${SDK}/src/core/string_buffer.cpp"
   "${SDK}/src/graphics/register_file.cpp"
   "${SDK}/src/graphics/format/ucode.cpp"
@@ -29,4 +40,15 @@ add_test(NAME native-rex-shaders COMMAND native-rex-shader-tests)
 if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
   target_compile_definitions(native-rex-shader-tests PRIVATE REX_NATIVE_TEST_METAL=1)
   target_link_libraries(native-rex-shader-tests PRIVATE rex-native-metal)
+  add_executable(native-bc-tests tests/bc-textures.cpp tests/math-stubs.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/native-test-texture-info.cpp"
+    "${SDK}/src/graphics/pipeline/texture/util.cpp"
+    "${SDK}/src/graphics/pipeline/texture/info_formats.cpp")
+  target_compile_definitions(native-bc-tests PRIVATE NDEBUG FMT_HEADER_ONLY)
+  target_link_libraries(native-bc-tests PRIVATE rex-native-rex-adapters rex-native-metal)
+  add_test(NAME native-bc COMMAND native-bc-tests)
+elseif(NOT APPLE)
+  add_library(native-bc-compile OBJECT tests/bc-textures.cpp)
+  target_compile_definitions(native-bc-compile PRIVATE NDEBUG FMT_HEADER_ONLY)
+  target_link_libraries(native-bc-compile PRIVATE rex-native-rex-adapters)
 endif()

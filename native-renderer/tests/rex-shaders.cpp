@@ -51,6 +51,34 @@ int main(int argc,char** argv) {
       check(!host.block_compressed);check(!RexTextures::LoadKernel(host.load_shader).empty());
     }
   }
+  {
+    using F=xenos::TextureFormat;using D=xenos::DataDimension;
+    const F compressed[]={F::k_DXT1,F::k_DXT2_3,F::k_DXT4_5,F::k_DXN,F::k_DXT5A};
+    for(F format:compressed)for(bool tiled:{false,true})for(auto shape:std::array<std::array<uint32_t,4>,4>{{{64,32,1,6},{64,64,3,6},{64,64,6,6},{4,4,1,2}}}) {
+      RexTextures::Key key;key.base_page=1;key.mip_page=2;key.format=format;key.dimension=shape[2]==6?D::kCube:D::k2DOrStacked;
+      key.width_minus_1=shape[0]-1;key.height_minus_1=shape[1]-1;key.depth_or_array_size_minus_1=shape[2]-1;
+      key.pitch=(shape[0]+31)/32;key.packed_mips=1;key.mip_max_level=shape[3];key.tiled=tiled;
+      const auto layout=key.GetGuestLayout();RexTextures::LoadPlan plans[2];
+      for(unsigned native=0;native<2;++native) {
+        const auto host=RexTextures::Formats(key,bool(native)).format_unsigned;
+        check(host.block_compressed==bool(native));
+        check(RexTextures::PlanLoad(key,layout,RexTextures::LoadMetadata(host.load_shader),host,true,true,plans[native],error));
+        check(plans[native].copies.size()==(key.mip_max_level+1)*shape[2]);
+        for(const auto& copy:plans[native].copies) {
+          const auto info=Describe(host.format);const uint64_t row=((copy.width+info.block_width-1)/info.block_width)*info.bytes;
+          const uint64_t rows=(copy.height+info.block_height-1)/info.block_height;
+          check(copy.source.offset<plans[native].size&&copy.source.length>=copy.bytes_per_row*(rows-1)+row);
+          check(copy.bytes_per_row>=row&&copy.bytes_per_image>=copy.bytes_per_row*rows);
+        }
+      }
+      check(plans[1].size<plans[0].size);
+      key.dimension=D::k3D;check(!RexTextures::Formats(key,true).format_unsigned.block_compressed);
+      key.dimension=D::k2DOrStacked;key.width_minus_1=62;check(!RexTextures::Formats(key,true).format_unsigned.block_compressed);
+    }
+    Surface image;image.width=image.height=4;image.levels=3;image.format=Format::BC1;check(RexTextures::StorageBytes(image)==24);
+    image.layers=6;check(RexTextures::StorageBytes(image)==144);image.format=Format::RGBA8;check(RexTextures::StorageBytes(image)==504);
+    check(RexTextures::Formats(F::k_Cr_Y1_Cb_Y0_REP,true).format_unsigned.format==Format::RGBA8);
+  }
   for(unsigned format=0;format<16;++format)for(unsigned sample=0;sample<3;++sample) {
     RexRenderTargets::Key key;key.resource_format=format;key.msaa_samples=xenos::MsaaSamples(sample);
     if(RexRenderTargets::NativeColorFormat(key.GetColorFormat())==Format::Invalid)continue;

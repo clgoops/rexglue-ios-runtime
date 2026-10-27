@@ -95,6 +95,7 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
   std::optional<ConvertedShader> depth_only_;
   Shader swap_vs_,swap_fs_;Pipeline swap_pipeline_;std::array<std::optional<Surface>,3> output_;uint32_t output_index_=0;
   BackendStats last_stats_{};
+  RexTextures::LoadStats last_texture_stats_{};
 };
 bool NativeCommandProcessor::SetupContext() {
   if(!CommandProcessor::SetupContext())return false;
@@ -117,13 +118,14 @@ bool NativeCommandProcessor::SetupContext() {
   shared_=std::make_unique<RexSharedMemory>(*memory_);
   std::vector<Identity> chunks(1u<<translator_->GetSharedMemoryStorageBufferCountLog2());for(auto& id:chunks)id=next_();
   if(!shared_->Initialize(chunks,error))return Fail(error);
-  textures_=std::make_unique<RexTextures>(*register_file_,*shared_,next_);
+  textures_=std::make_unique<RexTextures>(*register_file_,*shared_,next_,caps_.bc_texture_compression);
   primitives_=std::make_unique<RexPrimitives>(*register_file_,*memory_,*shared_,next_);if(!primitives_->Initialize())return Fail("native primitive processor initialization failed");
   targets_=std::make_unique<RexRenderTargets>(*register_file_,*memory_,next_);targets_->Initialize();
   swap_vs_={next_(),Stage::Vertex,"swap_vertex",{},kSwapVertex,{}};
   swap_fs_={next_(),Stage::Fragment,"swap_fragment",{},kSwapFragment,{{ArgumentKind::Texture,0,1,0,1,TextureKind::TwoDArray},{ArgumentKind::Buffer,0,1,2576,16}}};
   swap_pipeline_.id=next_();swap_pipeline_.vertex=swap_vs_.id;swap_pipeline_.fragment=swap_fs_.id;swap_pipeline_.colors[0]=Format::RGBA8;
   REXLOG_INFO("Native Metal guest GPU active: {} shared-memory chunks, original resolution, no Vulkan command submission",chunks.size());
+  REXLOG_INFO("Native Metal textures: native_BC={} (aligned 2D/array/cube); decoded fallback for unsupported devices/shapes",caps_.bc_texture_compression);
   REXLOG_INFO("Native Metal resource policy: textures 384/768 MiB, soft lifetime 30 s; surfaces 1280 MiB; retire targets at guest swaps with a bounded 128 MiB exact-key reuse pool");
   std::string qualification;bool batching=service_->backend.QualifyUploadBatching(qualification);
   REXLOG_INFO("Native Metal batching: aligned buffer uploads within compatible passes; enabled={} qualification={}",batching,qualification);
@@ -318,6 +320,10 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
       (stats.inline_upload_bytes-last_stats_.inline_upload_bytes)>>10,
       double(stats.render_area_pixels-last_stats_.render_area_pixels)/1e6,double(stats.render_area_used_pixels-last_stats_.render_area_used_pixels)/1e6);
     last_stats_=stats;
+    const auto loads=textures_->load_stats();
+    REXLOG_INFO("Native texture loads last 120 swaps: BC={} uncompressed={} staging_KiB={}",loads.native_bc-last_texture_stats_.native_bc,
+      loads.uncompressed-last_texture_stats_.uncompressed,(loads.staging_bytes-last_texture_stats_.staging_bytes)>>10);
+    last_texture_stats_=loads;
   }
   if(auto* presenter=graphics_system_->presenter())presenter->RefreshGuestOutput(width,height,width,height,[image](ui::Presenter::GuestOutputRefreshContext& c) {
     auto& context=static_cast<NativeRefreshContext&>(c);context.output=image;context.SetIs8bpc(true);return true;

@@ -20,8 +20,8 @@ template<class T> void Add(std::vector<T>& list,const T& value) {
   if(std::none_of(list.begin(),list.end(),[&](const T& s){return s.id==value.id;}))list.push_back(value);
 }
 }
-RexTextures::RexTextures(const gfx::RegisterFile& regs,RexSharedMemory& shared,std::function<Identity()> next)
-    :gfx::TextureCache(regs,shared,1,1),shared_(shared),next_(std::move(next)) {}
+RexTextures::RexTextures(const gfx::RegisterFile& regs,RexSharedMemory& shared,std::function<Identity()> next,bool native_bc)
+    :gfx::TextureCache(regs,shared,1,1),shared_(shared),next_(std::move(next)),native_bc_(native_bc) {}
 RexTextures::~RexTextures() {DestroyAllTextures(true);}
 void RexTextures::BeginNativeFrame(Frame& f,uint64_t submission,uint64_t completed) {
   frame_=&f;CompletedSubmissionUpdated(completed);BeginSubmission(submission);BeginFrame();
@@ -32,12 +32,12 @@ bool RexTextures::Declare(const Surface& image) {
   Add(frame_->surfaces,image);return true;
 }
 bool RexTextures::IsSignedVersionSeparateForFormat(Key key) const {
-  auto p=Formats(key.format);return p.format_unsigned.format!=Format::Invalid &&
+  auto p=Formats(key,native_bc_);return p.format_unsigned.format!=Format::Invalid &&
     p.format_signed.format!=Format::Invalid && p.format_unsigned.format!=p.format_signed.format;
 }
-uint32_t RexTextures::GetHostFormatSwizzle(Key key) const {return Formats(key.format).swizzle;}
+uint32_t RexTextures::GetHostFormatSwizzle(Key key) const {return Formats(key,native_bc_).swizzle;}
 std::unique_ptr<gfx::TextureCache::Texture> RexTextures::CreateTexture(Key key) {
-  auto pair=Formats(key.format);
+  auto pair=Formats(key,native_bc_);
   auto format=key.signed_separate || pair.format_unsigned.load_shader==kLoadShaderIndexUnknown?
     pair.format_signed:pair.format_unsigned;
   if(format.format==Format::Invalid || format.load_shader==kLoadShaderIndexUnknown || key.scaled_resolve) {
@@ -84,7 +84,7 @@ bool RexTextures::Active(uint32_t fetch,gfx::xenos::FetchOpDimension dimension,b
   if(fetch>=32 || !frame_ || faulted()) {error="invalid native texture binding request";return false;}
   auto* binding=GetValidTextureBinding(fetch);
   if(!binding || !Dimensions(dimension,binding->key.dimension))return Null(dimension,out,error);
-  const auto formats=Formats(binding->key.format);
+  const auto formats=Formats(binding->key,native_bc_);
   if((is_signed?formats.format_signed:formats.format_unsigned).format==Format::Invalid)return Null(dimension,out,error);
   auto* texture=static_cast<NativeTexture*>(is_signed && IsSignedVersionSeparateForFormat(binding->key)?binding->texture_signed:binding->texture);
   if(!texture)return Null(dimension,out,error);
@@ -124,78 +124,36 @@ bool RexTextures::LoadTextureDataFromResidentMemoryImpl(Texture& texture,bool ba
   if(!loaded && failure_.empty())failure_="native texture upload failed";return loaded;
 }
 bool RexTextures::Load(NativeTexture& texture,bool load_base,bool load_mips) {
-  auto key=texture.key();const auto pair=Formats(key.format);
+  auto key=texture.key();const auto pair=Formats(key,native_bc_);
   auto format=key.signed_separate || pair.format_unsigned.load_shader==kLoadShaderIndexUnknown?pair.format_signed:pair.format_unsigned;
   auto* converted=Kernel(format.load_shader);if(!converted || !Declare(texture.image))return false;
   const auto& info=GetLoadShaderInfo(format.load_shader);const auto& layout=texture.guest_layout();
-  const auto* guest=gfx::FormatInfo::Get(key.format);
-  const uint32_t block_width=guest->block_width,block_height=guest->block_height,bpb=guest->bytes_per_block();
-  const bool is_3d=key.dimension==gfx::xenos::DataDimension::k3D;
-  const uint32_t width=key.GetWidth(),height=key.GetHeight(),depth=is_3d?key.GetDepthOrArraySize():1,array=is_3d?1:key.GetDepthOrArraySize();
-  const uint32_t first=load_base?0:1,last=load_mips?key.mip_max_level:0,packed=layout.packed_level;
-  const uint32_t loop_first=packed==0?uint32_t(first!=0):std::min(first,packed);
-  const uint32_t loop_last=packed==0?uint32_t(last!=0):std::min(last,packed);
-  const uint32_t host_bw=format.block_compressed?block_width:1,host_bh=format.block_compressed?block_height:1;
-  uint32_t blocks_per_thread=1u<<info.guest_x_blocks_per_thread_log2;
-  if(!format.block_compressed)blocks_per_thread*=block_width;
-  struct Host {uint64_t offset=0,slice=0;uint32_t pitch=0,rows=0;};
-  Host host_base,host_mips[gfx::xenos::kTextureMaxMips]{};uint64_t size=0;
-  for(uint32_t loop=loop_first;loop<=loop_last;++loop) {
-    bool base=loop==0;uint32_t level=packed==0?0:loop;auto& h=base?host_base:host_mips[level];
-    const auto& g=base?layout.base:layout.mips[level];h.offset=size;
-    uint32_t w=level==packed?g.x_extent_blocks*block_width:std::max(1u,width>>level);
-    uint32_t y=level==packed?g.y_extent_blocks*block_height:std::max(1u,height>>level);
-    uint32_t z=level==packed?g.z_extent:std::max(1u,depth>>level);
-    h.pitch=rex::round_up((w+host_bw-1)/host_bw,blocks_per_thread);h.rows=(y+host_bh-1)/host_bh;
-    h.slice=uint64_t(info.bytes_per_host_block)*h.pitch*h.rows*z;size+=h.slice*array;
-  }
-  if(!size || size>256ull*1024*1024) {failure_="native texture staging exceeds 256 MiB";return false;}
-  BufferStorage scratch{next_(),size,true,{}};scratch.owner=std::make_shared<const Identity>(scratch.id);frame_->buffer_storage.push_back(scratch);
+  LoadPlan plan;
+  if(!PlanLoad(key,layout,info,format,load_base,load_mips,plan,failure_))return false;
+  // Some old 2D declarations use 3D tiled addressing; preserve that SDK rule.
+  if(texture.force_load_3d_tiling())for(auto& step:plan.loads)step.constants.is_tiled_3d_endian_scale|=2;
+  BufferStorage scratch{next_(),plan.size,true,{}};scratch.owner=std::make_shared<const Identity>(scratch.id);frame_->buffer_storage.push_back(scratch);
   Add(frame_->shaders,converted->shader);
   const uint32_t source_alignment=1u<<info.source_bpe_log2;
   std::optional<BufferView> source_base,source_mips;
-  if(first==0)source_base=shared_.ContiguousView(key.base_page<<12,rex::align(texture.GetGuestBaseSize(),source_alignment),next_,failure_);
-  if(last!=0)source_mips=shared_.ContiguousView(key.mip_page<<12,rex::align(texture.GetGuestMipsSize(),source_alignment),next_,failure_);
-  if((first==0&&!source_base)||(last!=0&&!source_mips))return false;
-  for(uint32_t loop=loop_first;loop<=loop_last;++loop) {
-    bool base=loop==0;uint32_t level=packed==0?0:loop;const auto& g=base?layout.base:layout.mips[level];const auto& h=base?host_base:host_mips[level];
-    LoadConstants c{};c.is_tiled_3d_endian_scale=uint32_t(key.tiled)|(uint32_t(is_3d||texture.force_load_3d_tiling())<<1)|(uint32_t(key.endianness)<<2)|(1u<<4)|(1u<<7);
-    c.guest_offset=base?0:layout.mip_offsets_bytes[level];c.guest_pitch_aligned=key.tiled?g.row_pitch_bytes/bpb:g.row_pitch_bytes;
-    c.guest_z_stride_block_rows_aligned=g.z_slice_stride_block_rows;
-    const uint32_t w=level==packed?g.x_extent_blocks*block_width:std::max(1u,width>>level);
-    const uint32_t y=level==packed?g.y_extent_blocks*block_height:std::max(1u,height>>level);
-    c.size_blocks[0]=(w+block_width-1)/block_width;c.size_blocks[1]=(y+block_height-1)/block_height;
-    c.size_blocks[2]=level==packed?g.z_extent:std::max(1u,depth>>level);c.height_texels=y;
-    c.host_offset=uint32_t(h.offset);c.host_pitch=info.bytes_per_host_block*h.pitch;
-    for(uint32_t slice=0;slice<array;++slice) {
-      Buffer constants{next_(),Constants(c),true};frame_->buffers.push_back(constants);
-      std::vector<DescriptorResources> resources={
-        {ResourceSource::Descriptor,0,0,{{scratch.id,0,size}},{},{}},
-        {ResourceSource::Descriptor,1,0,{base?*source_base:*source_mips},{},{}},
-        {ResourceSource::PushConstants,0,0,{{constants.id,0,256}},{},{}}};
-      Dispatch d;d.shader=converted->shader.id;d.threads=converted->workgroup_size;
-      d.groups={(c.size_blocks[0]+(1u<<info.GetGuestXBlocksPerGroupLog2())-1)>>info.GetGuestXBlocksPerGroupLog2(),
-        (c.size_blocks[1]+(1u<<kLoadGuestYBlocksPerGroupLog2)-1)>>kLoadGuestYBlocksPerGroupLog2,c.size_blocks[2]};
-      std::optional<Buffer> aux;if(!BindConverted(*converted,resources,next_(),d.bindings,aux,failure_))return false;
-      if(aux)frame_->buffers.push_back(*aux);frame_->commands.push_back(std::move(d));
-      c.guest_offset+=g.array_slice_stride_bytes;c.host_offset+=uint32_t(h.slice);
-    }
+  if(load_base)source_base=shared_.ContiguousView(key.base_page<<12,rex::align(texture.GetGuestBaseSize(),source_alignment),next_,failure_);
+  if(load_mips&&key.mip_max_level)source_mips=shared_.ContiguousView(key.mip_page<<12,rex::align(texture.GetGuestMipsSize(),source_alignment),next_,failure_);
+  if((load_base&&!source_base)||(load_mips&&key.mip_max_level&&!source_mips))return false;
+  for(const auto& step:plan.loads) {
+    Buffer constants{next_(),Constants(step.constants),true};frame_->buffers.push_back(constants);
+    std::vector<DescriptorResources> resources={
+      {ResourceSource::Descriptor,0,0,{{scratch.id,0,plan.size}},{},{}},
+      {ResourceSource::Descriptor,1,0,{step.base?*source_base:*source_mips},{},{}},
+      {ResourceSource::PushConstants,0,0,{{constants.id,0,256}},{},{}}};
+    Dispatch d;d.shader=converted->shader.id;d.threads=converted->workgroup_size;d.groups=step.groups;
+    std::optional<Buffer> aux;if(!BindConverted(*converted,resources,next_(),d.bindings,aux,failure_))return false;
+    if(aux)frame_->buffers.push_back(*aux);frame_->commands.push_back(std::move(d));
   }
-  for(uint32_t level=first;level<=last;++level) {
-    const auto& h=level==0?host_base:host_mips[std::min(level,packed)];uint64_t offset=h.offset;
-    if(level>=packed) {
-      uint32_t x,y,z;gfx::texture_util::GetPackedMipOffset(width,height,depth,key.format,level,x,y,z);
-      if(!format.block_compressed) {x*=block_width;y*=block_height;}
-      offset+=uint64_t(info.bytes_per_host_block)*(x+uint64_t(h.pitch)*(y+uint64_t(h.rows)*z));
-    }
-    for(uint32_t slice=0;slice<array;++slice) {
-      BufferToTexture copy;copy.source={scratch.id,offset+h.slice*slice,size-offset-h.slice*slice};
-      copy.destination={texture.image.id};copy.destination.level=level;copy.destination.slice=slice;
-      copy.width=std::max(1u,width>>level);copy.height=std::max(1u,height>>level);copy.depth=std::max(1u,depth>>level);
-      copy.bytes_per_row=uint64_t(info.bytes_per_host_block)*h.pitch;copy.bytes_per_image=copy.bytes_per_row*h.rows;
-      frame_->commands.push_back(copy);
-    }
+  for(auto copy:plan.copies) {
+    copy.source.buffer=scratch.id;copy.destination.surface=texture.image.id;frame_->commands.push_back(copy);
   }
+  if(format.block_compressed)++stats_.native_bc;else ++stats_.uncompressed;
+  stats_.staging_bytes+=plan.size;
   ++texture.loaded;texture.MarkAsUsed();return true;
 }
 } // namespace rex::native
