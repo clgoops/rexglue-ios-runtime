@@ -3,7 +3,7 @@
   "files": {
     ".gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
     ".github/workflows/diagnostics-ios.yml": "a27b71c1fb52a344e1644a179c983f092afc3209b6c3fce347d31fed40249d95",
-    ".github/workflows/native-game-runtime-ios.yml": "f3e1bd238662c727ffe068c809a1e0096fdff92d68f1591031f612f51a08e700",
+    ".github/workflows/native-game-runtime-ios.yml": "4baca5282a768acb2499f3eae598bd5eb40787b809c964de4a496a1115a8958b",
     ".github/workflows/native-renderer-ios.yml": "303c2448b16514288213eda473e9d3dd18b4b1c68372081db1ce2692c8f9b7f3",
     ".github/workflows/runtime-ios.yml": "6d9a98c9e0b39a24fb9a0f169633d3028b53e019d3195d4e94a6b55deced3aeb",
     ".gitignore": "592189dacca5b0436eb31299777762de349938249279d257be7ae1eb4a99ae79",
