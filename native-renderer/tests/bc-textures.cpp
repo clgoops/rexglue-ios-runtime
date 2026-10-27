@@ -126,7 +126,12 @@ int main(){
           const size_t offset=(size_t(y)*native.output.width+cell*16+z)*4;
           for(unsigned c=0;c<4;++c)Check(std::abs(int(std::to_integer<uint8_t>(pixels[offset+c]))-expected[c])<=2);
         }
-      Check(native.staging<decoded.staging);Check(RexTextures::StorageBytes(native.image)<RexTextures::StorageBytes(decoded.image));
+      // Fixed 4x4 BC blocks can cost more than an R8/RG8 decoded mip tail.
+      // Resource savings are expected for the larger fixtures, not every tail.
+      if(key.GetWidth()>4) {
+        Check(native.staging<decoded.staging);
+        Check(RexTextures::StorageBytes(native.image)<RexTextures::StorageBytes(decoded.image));
+      }
       std::cout<<"BC case "<<++cases<<": format="<<uint32_t(format)<<" tiled="<<key.tiled<<" layers="<<key.GetDepthOrArraySize()<<" mips="<<key.mip_max_level+1<<" native_bytes="<<RexTextures::StorageBytes(native.image)<<" decoded_bytes="<<RexTextures::StorageBytes(decoded.image)<<std::endl;
     }
   std::cout<<cases<<" SDK upload/native BC pixel cases and "<<checks<<" checks passed\n";

@@ -61,7 +61,7 @@
     "native-renderer/src/rex_transfer_shader.cpp": "70a8b7b1f0d367f45c10eadb9a419203ffcd8eeea947888ee011f215d90b60e0",
     "native-renderer/src/spirv.cpp": "1ed13e9a73cdb5f60799f79ab7b8c99fa44c96420e3695f22a7667f014b98d3a",
     "native-renderer/src/upload_probe.cpp": "2cef1fae89f70ba99068225871a9787a546870c4c0828089f3d00ddd674db939",
-    "native-renderer/tests/bc-textures.cpp": "a283e32fdb9660a94394fc080e93c09275e01c709560af183fd160fb0787b8f3",
+    "native-renderer/tests/bc-textures.cpp": "a2483fd15207db71d55184a7a89ee69a05c56f76f6a336efaac83509c98bf6c1",
     "native-renderer/tests/fixtures.h": "64fe214cfebb00acc9dd28d9484bd765840d66c1def2b9a3bbb653354a5dd9dd",
     "native-renderer/tests/frame.cpp": "8d1bbe1534c2bd207ab548e4e2776d2d0644d7f60ef59350a52c2399c56c988f",
     "native-renderer/tests/math-stubs.cpp": "cca4085309e50121afd94f89cd4d2fd1729f9c1b9dddda219c71d6923e45cf49",
