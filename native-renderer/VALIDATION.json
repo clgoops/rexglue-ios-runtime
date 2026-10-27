@@ -1,5 +1,5 @@
 {
-  "implementation_commit": "09567b1508f34647f1b96975b7279bd962b86ae4",
+  "implementation_commit": "7f91a2336f4c9a65aa8e6765e3d0aeba6f26f408",
   "renderer_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40491985015",
   "cpu_frame_checks": 91,
   "cpu_binding_checks": 32,
@@ -16,7 +16,7 @@
   "native_target_bridge_compiled_for_ios_arm64": true,
   "native_metal_backend_dylib_sha256": "865c3947ec4a2f5397b130a5c6baa8f79b2d712e6a137e929aa7cae8f6c69379",
   "live_frontend_implemented": true,
-  "game_runtime_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40588775996",
+  "game_runtime_workflow_run": "https://github.com/clgoops/rexglue-ios-runtime/actions/runs/40592504497",
   "device_execution_verified": false,
   "blur_performance_improvement_measured": false,
   "installable_ipa_produced_by_this_stage": true,
@@ -32,18 +32,18 @@
   "runtime_libraries": [
     {
       "name": "librexruntime.dylib",
-      "sha256": "2a10703a3f3678345b4b7bc59779df14f230a13beec34398e1270b2f2c0ebe68",
-      "bytes": 9202392
+      "sha256": "5f69ab0ca6d5ff7c1922636017c0659fbc9d4acc07042c75f72fdbcbe3886187",
+      "bytes": 9159328
     },
     {
       "name": "librexgpu-xenos.dylib",
-      "sha256": "4feab89621676d6fdd0c9e982eb363b77a947e43ec03138acf8831bb6608ee37",
-      "bytes": 14757152
+      "sha256": "27411408c14c36be7f252d8ae5064c5c027c1043b9a683425864faa05eac29a1",
+      "bytes": 14405864
     },
     {
       "name": "libMoltenVK.dylib",
-      "sha256": "0ce9d6dfbf6f05d10d01fe9583eb0586fc125f338905600dae594b09f1305c05",
-      "bytes": 5003248
+      "sha256": "29ee3397f148024381216f07165efe46afec29d0205ff0e16e92e40c4b106336",
+      "bytes": 4511560
     }
   ],
   "production_ui_drawer_gpu_checks": 33,
@@ -63,9 +63,9 @@
   "upload_probe_fixture_pixels": "passed with conventional uploads",
   "upload_batching_runtime_activation": "physical Apple9+; isolated vertex/index/4x MSAA pixel qualification required",
   "renderer_test_source_commit": "90e573f3569d3efffca0330e57b2a69100685436",
-  "renderer_test_source_difference": "Full runtime workflow runner only; identical native renderer inputs",
-  "runtime_xcode": "Xcode 26.6\nBuild version 17F113\n",
-  "runtime_ios_sdk": "26.5\n",
+  "renderer_test_source_difference": "Full runtime workflow/toolchain and validation documentation only; identical renderer implementation and test inputs",
+  "runtime_xcode": "Xcode 16.4\nBuild version 16F6\n",
+  "runtime_ios_sdk": "18.5\n",
   "native_bc_gpu_cases": 20,
   "native_bc_gpu_checks": 762015,
   "native_bc_pixel_comparison": "passed with Metal API validation",

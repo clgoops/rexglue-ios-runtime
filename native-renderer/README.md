@@ -116,3 +116,9 @@ covering mipmaps, packed tails, arrays, cube faces, tiling and byte ordering.
 The larger DXT1 fixture uses about one-eighth of decoded logical texture storage;
 tiny BC4/5 mip tails can be larger than decoded tails because of fixed blocks.
 These storage/pixel results do not establish a game FPS improvement.
+
+The complete ARM64 iOS runtime passed run 40592504497, source 7f91a23.
+Runtime builds pin Xcode 16.4 / iOS SDK 18.5 to retain the existing AOT app's
+dynamic interface. The Xcode 26.6 runtime compiled successfully but failed
+the private package's strict export-compatibility check; it was not packaged.
+The original export/import checks passed with the pinned toolchain.
