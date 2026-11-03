@@ -37,6 +37,7 @@ struct BackendStats {
   uint64_t slot_wait_ns=0,prepare_ns=0,encode_ns=0,drawable_wait_ns=0,presents=0;
   // Mutable (staging) buffers: fresh Metal allocations versus retired reuses.
   uint64_t storage_allocations=0,storage_reuses=0,compute_encoders=0,blit_encoders=0;
+  uint64_t folded_clears=0; // Full-area leading clears encoded as load actions.
 };
 // Sampled stage-boundary timestamps for frames submitted with Frame::profile.
 // Encoder windows can overlap on tile-based GPUs, so category sums may exceed

@@ -756,6 +756,26 @@ struct MetalBackend::Impl {
     }
     if(pass.depth){auto a=*pass.depth;a.store=last.depth->store;Attachment(desc.depthAttachment,a,error);if(!desc.depthAttachment.texture)return false;desc.depthAttachment.clearDepth=pass.depth->depth;}
     if(pass.stencil){auto a=*pass.stencil;a.store=last.stencil->store;Attachment(desc.stencilAttachment,a,error);if(!desc.stencilAttachment.texture)return false;desc.stencilAttachment.clearStencil=pass.stencil->stencil;}
+    // A leading clear covering the whole render area becomes the load action:
+    // the tile memory starts cleared instead of reading the attachment and
+    // drawing a full-area clear. Integer color formats keep the draw path.
+    const RectClear* folded=nullptr;
+    if(!pass.commands.empty())if(const auto* c=std::get_if<RectClear>(&pass.commands[0])) {
+      // Only whole-attachment passes fold, so no clear can reach outside the rectangle.
+      const auto& r=c->rectangle;bool covers=area.width==pass.width&&area.height==pass.height&&r.x==0&&r.y==0&&
+        r.x+r.width>=area.width&&r.y+r.height>=area.height&&(c->colors||c->depth||c->stencil);
+      auto integer=[&](const native::Attachment& a){const auto f=a.view.format==Format::Invalid?surfaces.at(a.view.surface).source.format:a.view.format;
+        return f==Format::RG16Uint||f==Format::RGBA16Uint||f==Format::R32Uint||f==Format::RG32Uint;};
+      for(size_t i=0;i<4&&covers;++i)if((c->colors>>i)&1)covers=pass.colors[i]&&!integer(*pass.colors[i]);
+      if(covers&&c->depth)covers=bool(pass.depth);if(covers&&c->stencil)covers=bool(pass.stencil);
+      if(covers)folded=c;
+    }
+    if(folded) {
+      for(size_t i=0;i<4;++i)if((folded->colors>>i)&1){auto a=desc.colorAttachments[i];a.loadAction=MTLLoadActionClear;const auto& v=folded->color[i];a.clearColor=MTLClearColorMake(v[0],v[1],v[2],v[3]);}
+      if(folded->depth){desc.depthAttachment.loadAction=MTLLoadActionClear;desc.depthAttachment.clearDepth=folded->depth_value;}
+      if(folded->stencil){desc.stencilAttachment.loadAction=MTLLoadActionClear;desc.stencilAttachment.clearStencil=folded->stencil_value;}
+      ++counters.folded_clears;
+    }
     GpuPassSample sample;sample.width=area.width;sample.height=area.height;sample.samples=pass.samples;sample.depth=bool(pass.depth);
     for(const auto& c:pass.colors)if(c){++sample.colors;sample.loads|=c->load==Load::Load;}
     if(pass.depth)sample.loads|=pass.depth->load==Load::Load;
@@ -765,6 +785,7 @@ struct MetalBackend::Impl {
     for(size_t i=begin;i<end&&success;++i) {
       if(const auto* upload=std::get_if<BufferUpload>(&frame.commands[i]))success=InlineUpload(e,*upload,pass,bindings,lease,error);
       else for(const auto& command:std::get<Pass>(frame.commands[i]).commands){
+        if(folded&&std::get_if<RectClear>(&command)==folded)continue;
         if(const auto* draw=std::get_if<Draw>(&command))success=DrawCall(e,*draw,bindings,lease,error);
         else {success=ClearCall(e,std::get<RectClear>(command),pass,bindings,lease,error);if(sampled!=SIZE_MAX)++profiler->encoders[sampled].pass.clears;}
         if(!success)break;

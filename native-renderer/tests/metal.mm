@@ -188,6 +188,17 @@ int main(){@autoreleasepool {
     Submit(backend,std::move(f));Pixel(backend,View(1),5,5,{255,0,0,255});Pixel(backend,View(1),1,1,{0,0,255,255});Done("partial stencil clear and stencil comparison");
   }
   {
+    // A full-area leading clear becomes a load action; a partial clear keeps
+    // the draw path and preserves the surrounding pixels.
+    MetalBackend backend;Frame f;f.sequence=1;auto target=Target(1);f.surfaces={target};f.commands.emplace_back(ColorPass(1,{1,0,0,1}));Submit(backend,std::move(f));
+    auto clearing=[&](uint64_t sequence,Rect rect,std::array<double,4> color){
+      Frame g;g.sequence=sequence;g.surfaces={target};Pass p;p.width=p.height=16;p.colors[0]=Attachment{View(1)};
+      RectClear c;c.rectangle=rect;c.colors=1;c.color[0]=color;p.commands.push_back(c);g.commands.emplace_back(std::move(p));return g;};
+    Submit(backend,clearing(2,{0,0,16,16},{0,0,1,1}));Pixel(backend,View(1),8,8,{0,0,255,255});Check(backend.Stats().folded_clears==1);
+    Submit(backend,clearing(3,{0,0,8,8},{0,1,0,1}));Pixel(backend,View(1),2,2,{0,255,0,255});Pixel(backend,View(1),12,12,{0,0,255,255});
+    Check(backend.Stats().folded_clears==1);Done("full-area clears fold into load actions; partial clears preserve pixels");
+  }
+  {
     MetalBackend backend;Surface image=Target(2);image.renderable=false;std::vector<std::byte> pixels(1024);
     for(size_t i=0;i<pixels.size();i+=4){pixels[i+1]=pixels[i+3]=std::byte{255};}
     Submit(backend,TexturedFrame(image,Data(std::span<const std::byte>(pixels)),64,1024));Pixel(backend,View(1),8,8,{0,255,0,255});Done("ordered texture upload and reflected texture/sampler slots");

@@ -328,9 +328,10 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
       per_swap(stats.slot_wait_ns,last_stats_.slot_wait_ns),per_swap(stats.prepare_ns,last_stats_.prepare_ns),
       per_swap(stats.encode_ns,last_stats_.encode_ns),per_swap(stats.drawable_wait_ns,last_stats_.drawable_wait_ns),
       double(stats.submitted-last_stats_.submitted)/120,double(stats.presents-last_stats_.presents)/120);
-    REXLOG_INFO("Native Metal encoders/swap: render={:.1f} compute={:.1f} blit={:.1f} resolve={:.1f}; staging buffers new={} reused={}",
+    REXLOG_INFO("Native Metal encoders/swap: render={:.1f} compute={:.1f} blit={:.1f} resolve={:.1f} folded_clears={:.1f}; staging buffers new={} reused={}",
       double(stats.passes-last_stats_.passes)/120,double(stats.compute_encoders-last_stats_.compute_encoders)/120,
       double(stats.blit_encoders-last_stats_.blit_encoders)/120,double(stats.resolves-last_stats_.resolves)/120,
+      double(stats.folded_clears-last_stats_.folded_clears)/120,
       stats.storage_allocations-last_stats_.storage_allocations,stats.storage_reuses-last_stats_.storage_reuses);
     last_stats_=stats;
     const auto gpu=service_->backend.TakeGpuProfile();const auto frames=std::exchange(profiled_frames_,0u);
