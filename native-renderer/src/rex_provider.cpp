@@ -48,6 +48,12 @@ class NativePresenter final:public ui::Presenter {
     uint32_t index;auto consumed=ConsumeGuestOutput(index,nullptr,nullptr);Surface image;
     if(index!=UINT32_MAX) {std::lock_guard lock(mailbox_mutex_);image=mailbox_[index];}consumed.unlock();
     if(!image.id)return PaintResult::kNotPresented;
+    // Each present waits for a drawable while holding the service lock. Present
+    // a new guest image at once; repaint an unchanged one at most every 50 ms
+    // so the touch overlay still responds.
+    const auto now=std::chrono::steady_clock::now();
+    if(image.id==last_image_&&now-last_present_<std::chrono::milliseconds(50))return PaintResult::kNotPresented;
+    last_image_=image.id;last_present_=now;
     auto frame=std::make_shared<Frame>();Declare(frame->surfaces,image);
     if(ui&&!ui_failed_) {
       if(!canvas_||canvas_->width!=image.width||canvas_->height!=image.height)canvas_=Target(*service_,image.width,image.height);
@@ -67,6 +73,7 @@ class NativePresenter final:public ui::Presenter {
   }
  private:
   std::shared_ptr<NativeService> service_;std::mutex mailbox_mutex_;std::array<Surface,kGuestOutputMailboxSize> mailbox_;std::optional<Surface> canvas_;bool ui_failed_=false;
+  Identity last_image_{};std::chrono::steady_clock::time_point last_present_{};
 };
 class NativeProvider final:public ui::GraphicsProvider {
  public:

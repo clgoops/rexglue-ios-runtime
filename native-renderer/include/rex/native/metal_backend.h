@@ -35,12 +35,14 @@ struct BackendStats {
   // CPU wall time inside Submit: frame-slot wait, resource preparation,
   // command encoding and drawable acquisition. Presents counts display passes.
   uint64_t slot_wait_ns=0,prepare_ns=0,encode_ns=0,drawable_wait_ns=0,presents=0;
+  // Mutable (staging) buffers: fresh Metal allocations versus retired reuses.
+  uint64_t storage_allocations=0,storage_reuses=0,compute_encoders=0,blit_encoders=0;
 };
 // Sampled stage-boundary timestamps for frames submitted with Frame::profile.
 // Encoder windows can overlap on tile-based GPUs, so category sums may exceed
 // the command-buffer window. Milliseconds are calibrated to GPUStart/EndTime.
 struct GpuPassSample {
-  double ms=0;uint32_t width=0,height=0,samples=1,draws=0,colors=0;bool depth=false,loads=false;
+  double ms=0;uint32_t width=0,height=0,samples=1,draws=0,clears=0,colors=0;bool depth=false,loads=false;
 };
 struct GpuProfile {
   uint64_t command_buffers=0,encoders=0,unsampled_encoders=0,unavailable=0;

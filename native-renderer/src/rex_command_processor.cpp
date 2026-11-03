@@ -328,6 +328,10 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
       per_swap(stats.slot_wait_ns,last_stats_.slot_wait_ns),per_swap(stats.prepare_ns,last_stats_.prepare_ns),
       per_swap(stats.encode_ns,last_stats_.encode_ns),per_swap(stats.drawable_wait_ns,last_stats_.drawable_wait_ns),
       double(stats.submitted-last_stats_.submitted)/120,double(stats.presents-last_stats_.presents)/120);
+    REXLOG_INFO("Native Metal encoders/swap: render={:.1f} compute={:.1f} blit={:.1f} resolve={:.1f}; staging buffers new={} reused={}",
+      double(stats.passes-last_stats_.passes)/120,double(stats.compute_encoders-last_stats_.compute_encoders)/120,
+      double(stats.blit_encoders-last_stats_.blit_encoders)/120,double(stats.resolves-last_stats_.resolves)/120,
+      stats.storage_allocations-last_stats_.storage_allocations,stats.storage_reuses-last_stats_.storage_reuses);
     last_stats_=stats;
     const auto gpu=service_->backend.TakeGpuProfile();const auto frames=std::exchange(profiled_frames_,0u);
     if(gpu.command_buffers&&frames) {
@@ -335,7 +339,7 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
         frames,gpu.command_buffers,gpu.window_ms/frames,gpu.render_ms/frames,gpu.vertex_ms/frames,gpu.fragment_ms/frames,
         gpu.resolve_ms/frames,gpu.compute_ms/frames,gpu.blit_ms/frames,double(gpu.encoders)/frames,gpu.unsampled_encoders);
       for(const auto& p:gpu.slowest)if(p.ms>0)
-        REXLOG_INFO("Native GPU slow pass: {:.2f} ms {}x{} samples={} draws={} colors={} depth={} loads={}",p.ms,p.width,p.height,p.samples,p.draws,p.colors,p.depth,p.loads);
+        REXLOG_INFO("Native GPU slow pass: {:.2f} ms {}x{} samples={} draws={} clears={} colors={} depth={} loads={}",p.ms,p.width,p.height,p.samples,p.draws,p.clears,p.colors,p.depth,p.loads);
     } else if(gpu.unavailable) REXLOG_INFO("Native GPU profile unavailable: {}",gpu.reason);
     const auto loads=textures_->load_stats();
     REXLOG_INFO("Native texture loads last 120 swaps: BC={} uncompressed={} staging_KiB={}",loads.native_bc-last_texture_stats_.native_bc,

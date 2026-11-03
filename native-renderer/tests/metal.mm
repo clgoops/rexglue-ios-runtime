@@ -227,6 +227,31 @@ int main(){@autoreleasepool {
     Done("GPU conversion buffer becomes a texture with explicit row pitch and offset");
   }
   {
+    // Two texture loads (untile dispatch, then copy) share one compute and one
+    // blit encoder. A third storage request reuses the first frame's buffer.
+    MetalBackend backend;Frame f;f.sequence=1;auto first=Target(1),second=Target(2);first.renderable=second.renderable=false;f.surfaces={first,second};
+    auto owner=std::make_shared<const int>(1);
+    f.buffer_storage={{Id(500),2048,true,owner},{Id(502),2048,true,std::make_shared<const int>(2)}};
+    Shader shader;shader.id=Id(100);shader.stage=Stage::Compute;shader.entry="compute_main";
+    shader.arguments={{ArgumentKind::Buffer,0,1,2048,4,TextureKind::TwoD,false,true}};
+    shader.msl="#include <metal_stdlib>\nusing namespace metal;kernel void compute_main(device uint* data[[buffer(0)]],uint2 p[[thread_position_in_grid]]){if(p.x<16&&p.y<16)data[4+p.y*20+p.x]=0xff00ff00u;}";
+    f.shaders={shader};
+    for(uint64_t id:{500,502}) {
+      Dispatch dispatch;dispatch.shader=shader.id;dispatch.groups={2,2,1};dispatch.threads={8,8,1};dispatch.bindings.buffers={{0,{Id(id),0,2048}}};f.commands.push_back(dispatch);
+      f.commands.push_back(BufferToTexture{{Id(id),16,1280},View(id==500?1:2),80,0,0,0,16,16});
+    }
+    Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{0,255,0,255});Pixel(backend,View(2),8,8,{0,255,0,255});
+    Check(backend.Stats().compute_encoders==1&&backend.Stats().blit_encoders==1&&backend.Stats().storage_allocations==2);
+    owner.reset();
+    Frame g;g.sequence=2;auto third=Target(3);third.renderable=false;g.surfaces={third};g.shaders={shader};
+    g.buffer_storage={{Id(503),2048,true,std::make_shared<const int>(3)}};
+    Dispatch dispatch;dispatch.shader=shader.id;dispatch.groups={2,2,1};dispatch.threads={8,8,1};dispatch.bindings.buffers={{0,{Id(503),0,2048}}};g.commands.push_back(dispatch);
+    g.commands.push_back(BufferToTexture{{Id(503),16,1280},View(3),80,0,0,0,16,16});
+    Submit(backend,std::move(g));Pixel(backend,View(3),8,8,{0,255,0,255});
+    Check(backend.Stats().storage_reuses==1&&backend.Stats().storage_allocations==2);
+    Done("batched texture-load encoders and retired staging buffer reuse");
+  }
+  {
     MetalBackend backend;Frame f;f.sequence=1;auto image=Target(1);image.renderable=false;image.kind=TextureKind::ThreeD;image.depth=2;f.surfaces={image};
     std::array<uint32_t,512> data;std::fill_n(data.begin(),256,0xff0000ffu);std::fill_n(data.begin()+256,256,0xffff0000u);
     f.buffers={{Id(500),Data(data),false}};auto view=View(1);

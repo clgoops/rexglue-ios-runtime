@@ -149,6 +149,50 @@ struct GpuProfiler {
   std::vector<EncoderSample> encoders;
   uint32_t Reserve(uint32_t count){if(used+count>capacity){++unsampled;return UINT32_MAX;}auto base=used;used+=count;return base;}
 };
+// Texture loads alternate compute untiling with buffer-to-texture copies. A run
+// of dispatches and transfers is encoded as one serial compute encoder followed
+// by one blit encoder, provided no dispatch binds a resource an earlier
+// transfer in the run touches and no transfer overlaps an earlier transfer's
+// writes. Texture subresources are distinct; buffers and bound views are whole.
+struct Touch {Identity id;uint32_t level=UINT32_MAX,slice=0,plane=0;};
+Touch Whole(Identity id){return {id};}
+Touch Part(const SurfaceView& v){return {v.surface,v.level,v.slice,v.plane};}
+bool Overlaps(const Touch& a,const Touch& b){
+  return a.id==b.id&&(a.level==UINT32_MAX||b.level==UINT32_MAX||(a.level==b.level&&a.slice==b.slice&&a.plane==b.plane));
+}
+bool Overlaps(const std::vector<Touch>& a,const std::vector<Touch>& b){
+  for(const auto& x:a)for(const auto& y:b)if(Overlaps(x,y))return true;return false;
+}
+void Transfers(const Command& c,std::vector<Touch>& reads,std::vector<Touch>& writes){
+  if(const auto* u=std::get_if<TextureUpload>(&c))writes.push_back(Part(u->destination));
+  else if(const auto* u=std::get_if<BufferUpload>(&c))writes.push_back(Whole(u->destination.buffer));
+  else if(const auto* b=std::get_if<BufferCopy>(&c)){reads.push_back(Whole(b->source.buffer));writes.push_back(Whole(b->destination.buffer));}
+  else if(const auto* b=std::get_if<BufferToTexture>(&c)){reads.push_back(Whole(b->source.buffer));writes.push_back(Part(b->destination));}
+  else if(const auto* i=std::get_if<ImageCopy>(&c)){reads.push_back(Part(i->source));writes.push_back(Part(i->destination));}
+}
+std::vector<Touch> Bound(const Dispatch& d){
+  std::vector<Touch> out;
+  for(const auto& b:d.bindings.buffers)out.push_back(Whole(b.view.buffer));
+  for(const auto& t:d.bindings.textures)out.push_back(Whole(t.view.surface));
+  return out;
+}
+// Returns the end of the batch starting at begin, filling the dispatch and
+// transfer indices in their original relative order.
+size_t TransferBatch(const Frame& f,size_t begin,std::vector<size_t>& dispatches,std::vector<size_t>& transfers){
+  std::vector<Touch> reads,writes;size_t end=begin;
+  for(;end<f.commands.size();++end){
+    const auto& c=f.commands[end];
+    if(std::holds_alternative<Pass>(c)||std::holds_alternative<Resolve>(c))break;
+    if(const auto* d=std::get_if<Dispatch>(&c)){
+      const auto bound=Bound(*d);if(Overlaps(bound,reads)||Overlaps(bound,writes))break;
+      dispatches.push_back(end);continue;
+    }
+    std::vector<Touch> r,w;Transfers(c,r,w);
+    if(Overlaps(r,writes)||Overlaps(w,writes)||Overlaps(w,reads))break;
+    reads.insert(reads.end(),r.begin(),r.end());writes.insert(writes.end(),w.begin(),w.end());transfers.push_back(end);
+  }
+  return end;
+}
 // Converts resolved timestamps to milliseconds using the command buffer's own
 // GPU window, so the result does not depend on the device's tick period.
 void Accumulate(GpuProfile& out,const GpuProfiler& p,NSData* data,double window_ms){
@@ -228,6 +272,10 @@ struct MetalBackend::Impl {
   std::map<Identity,SurfaceObject>::iterator surface_sweep=surfaces.end();
   std::map<Identity,StorageObject>::iterator storage_sweep=storage.end();
   uint64_t surface_bytes=0,storage_bytes=0;
+  // Retired mutable buffers (mostly per-load texture staging) are reused by
+  // size. They stay within storage_bytes; work on the single ordered queue
+  // keeps an earlier packet's use before any later reuse.
+  std::multimap<uint64_t,id<MTLBuffer>> free_storage;uint64_t free_storage_bytes=0;
   uint64_t last_sequence=0;
   std::string startup_error;
   id<MTLRenderPipelineState> present_pipeline=nil;
@@ -294,9 +342,13 @@ struct MetalBackend::Impl {
     for(size_t n=0;n<storage_count&&!storage.empty();++n){
       if(storage_sweep==storage.end())storage_sweep=storage.begin();
       auto i=storage_sweep++;if(!i->second.owner.expired())continue;
-      storage_bytes-=i->second.buffer.length;storage.erase(i);
+      const uint64_t length=i->second.buffer.length;
+      if(free_storage_bytes+length<=(256ull<<20)){free_storage.emplace(length,i->second.buffer);free_storage_bytes+=length;}
+      else storage_bytes-=length;
+      storage.erase(i);
     }
   }
+  void ReleaseFreeStorage(){storage_bytes-=free_storage_bytes;free_storage_bytes=0;free_storage.clear();}
   bool SurfaceCapacity(uint64_t requested,const Surface& spec,std::string& error){
     auto exceeds=[&]{return requested>options.surface_budget||surface_bytes>options.surface_budget-requested;};
     // Normal maintenance is incremental. Before rejecting a packet, examine
@@ -350,10 +402,21 @@ struct MetalBackend::Impl {
         if(i->second.size!=spec.size||i->second.writable!=spec.writable||!SameOwner(i->second.owner,spec.owner))return Fail(error,"Mutable buffer identity or ownership changed without a generation change");
         lease->gpu.push_back(i->second.buffer);active_buffers[spec.id]=i->second.buffer;continue;
       }
-      if(spec.size>device.maxBufferLength||spec.size>options.mutable_buffer_budget||storage_bytes>options.mutable_buffer_budget-spec.size)return Fail(error,"Mutable GPU buffer budget exceeded");
-      id<MTLBuffer> buffer=[device newBufferWithLength:spec.size options:MTLResourceStorageModePrivate];
-      if(!buffer)return Fail(error,"Mutable GPU buffer allocation failed");
-      storage_bytes+=buffer.length;storage.emplace(spec.id,StorageObject{spec.size,spec.writable,spec.owner,buffer});lease->gpu.push_back(buffer);active_buffers[spec.id]=buffer;
+      // Reuse a retired buffer no more than twice the requested size.
+      id<MTLBuffer> buffer=nil;
+      if(auto free=free_storage.lower_bound(spec.size);free!=free_storage.end()&&free->first<=spec.size*2){
+        buffer=free->second;free_storage_bytes-=free->first;free_storage.erase(free);
+      }
+      if(!buffer){
+        auto exceeds=[&]{return spec.size>device.maxBufferLength||spec.size>options.mutable_buffer_budget||storage_bytes>options.mutable_buffer_budget-spec.size;};
+        if(exceeds())ReleaseFreeStorage();
+        if(exceeds()){Sweep(true);ReleaseFreeStorage();}
+        if(exceeds())return Fail(error,"Mutable GPU buffer budget exceeded");
+        buffer=[device newBufferWithLength:spec.size options:MTLResourceStorageModePrivate];
+        if(!buffer)return Fail(error,"Mutable GPU buffer allocation failed");
+        storage_bytes+=buffer.length;++counters.storage_allocations;
+      } else ++counters.storage_reuses;
+      storage.emplace(spec.id,StorageObject{spec.size,spec.writable,spec.owner,buffer});lease->gpu.push_back(buffer);active_buffers[spec.id]=buffer;
     }
     return true;
   }
@@ -703,7 +766,7 @@ struct MetalBackend::Impl {
       if(const auto* upload=std::get_if<BufferUpload>(&frame.commands[i]))success=InlineUpload(e,*upload,pass,bindings,lease,error);
       else for(const auto& command:std::get<Pass>(frame.commands[i]).commands){
         if(const auto* draw=std::get_if<Draw>(&command))success=DrawCall(e,*draw,bindings,lease,error);
-        else success=ClearCall(e,std::get<RectClear>(command),pass,bindings,lease,error);
+        else {success=ClearCall(e,std::get<RectClear>(command),pass,bindings,lease,error);if(sampled!=SIZE_MAX)++profiler->encoders[sampled].pass.clears;}
         if(!success)break;
       }
     }
@@ -712,7 +775,8 @@ struct MetalBackend::Impl {
     counters.render_area_used_pixels+=uint64_t(area.width)*area.height;
     if(area.width!=pass.width||area.height!=pass.height)++counters.reduced_passes;return success;
   }
-  bool Compute(id<MTLCommandBuffer> cb,const Dispatch& d,const Frame& frame,std::shared_ptr<FrameLease> lease,std::string& error){
+  // The caller owns the serial compute encoder; consecutive dispatches share it.
+  bool Compute(id<MTLComputeCommandEncoder> e,const Dispatch& d,const Frame& frame,std::shared_ptr<FrameLease> lease,std::string& error){
     const Shader& shader=ShaderAt(frame,d.shader);auto function=Function(shader,lease,error);if(!function)return false;
     auto* cached=computes.Find(shader.id);
     if(cached&&cached->source!=shader)return Fail(error,"Compute shader identity changed without a generation change");
@@ -726,15 +790,15 @@ struct MetalBackend::Impl {
     }
     if(uint64_t(d.threads[0])*d.threads[1]*d.threads[2]>cached->pipeline.maxTotalThreadsPerThreadgroup)return Fail(error,"Compute threadgroup exceeds the compiled pipeline limit");
     if(!ActualBuffers(d.bindings,cached->arguments,error))return false;
-    lease->gpu.push_back(cached->pipeline);id<MTLComputeCommandEncoder> e=ComputeEncoder(cb);if(!e)return Fail(error,"Native compute encoder creation failed");
+    lease->gpu.push_back(cached->pipeline);
     [e setComputePipelineState:cached->pipeline];
     for(const auto& b:d.bindings.buffers)[e setBuffer:BufferAt(b.view) offset:b.view.offset atIndex:b.index];
-    for(const auto& t:d.bindings.textures){auto texture=Texture(t.view,true,error);if(!texture){[e endEncoding];return false;}lease->gpu.push_back(texture);[e setTexture:texture atIndex:t.index];}
+    for(const auto& t:d.bindings.textures){auto texture=Texture(t.view,true,error);if(!texture)return false;lease->gpu.push_back(texture);[e setTexture:texture atIndex:t.index];}
     for(const auto& s:d.bindings.samplers)[e setSamplerState:active_samplers.at(s.sampler).sampler atIndex:s.index];
-    [e dispatchThreadgroups:MTLSizeMake(d.groups[0],d.groups[1],d.groups[2]) threadsPerThreadgroup:MTLSizeMake(d.threads[0],d.threads[1],d.threads[2])];[e endEncoding];return true;
+    [e dispatchThreadgroups:MTLSizeMake(d.groups[0],d.groups[1],d.groups[2]) threadsPerThreadgroup:MTLSizeMake(d.threads[0],d.threads[1],d.threads[2])];return true;
   }
-  bool Transfer(id<MTLCommandBuffer> cb,const Command& command,std::shared_ptr<FrameLease> lease,std::string& error){
-    id<MTLBlitCommandEncoder> blit=BlitEncoder(cb);if(!blit)return Fail(error,"Native blit encoder creation failed");
+  // The caller owns the blit encoder; hazard-free consecutive transfers share it.
+  bool Transfer(id<MTLBlitCommandEncoder> blit,const Command& command,std::shared_ptr<FrameLease> lease,std::string& error){
     bool success=true;
     if(const auto* upload=std::get_if<BufferUpload>(&command)){
       id<MTLBuffer> source=[device newBufferWithBytes:upload->bytes->data() length:upload->bytes->size() options:MTLResourceStorageModeShared];
@@ -769,7 +833,7 @@ struct MetalBackend::Impl {
       if(!source||!destination)success=false;
       else {[blit copyFromTexture:source sourceSlice:copy.source.slice sourceLevel:copy.source.level sourceOrigin:MTLOriginMake(copy.source_x,copy.source_y,copy.source.plane) sourceSize:MTLSizeMake(copy.width,copy.height,1) toTexture:destination destinationSlice:copy.destination.slice destinationLevel:copy.destination.level destinationOrigin:MTLOriginMake(copy.destination_x,copy.destination_y,copy.destination.plane)];++counters.copies;}
     }
-    [blit endEncoding];return success;
+    return success;
   }
   bool ResolveImage(id<MTLCommandBuffer> cb,const Resolve& r,std::string& error){
     auto source=Texture(r.source,false,error),destination=Texture(r.destination,false,error);if(!source||!destination)return false;
@@ -848,9 +912,22 @@ bool MetalBackend::Submit(std::shared_ptr<const Frame> frame,std::function<void(
       const size_t end=impl_->options.inline_buffer_uploads&&([impl_->device supportsFamily:MTLGPUFamilyApple3]||[impl_->device supportsFamily:MTLGPUFamilyMac2])?RenderGroupEnd(*frame,index):index+1;
       success=impl_->Render(command,*frame,index,end,lease,error);index=end-1;
     }
-    else if(const auto* d=std::get_if<Dispatch>(&operation))success=impl_->Compute(command,*d,*frame,lease,error);
     else if(const auto* r=std::get_if<Resolve>(&operation))success=impl_->ResolveImage(command,*r,error);
-    else success=impl_->Transfer(command,operation,lease,error);
+    else {
+      std::vector<size_t> dispatches,transfers;const size_t end=TransferBatch(*frame,index,dispatches,transfers);
+      success=true;
+      if(!dispatches.empty()) {
+        id<MTLComputeCommandEncoder> e=impl_->ComputeEncoder(command);if(!e)return Fail(error,"Native compute encoder creation failed");++counters.compute_encoders;
+        for(size_t i:dispatches)if(success)success=impl_->Compute(e,std::get<Dispatch>(frame->commands[i]),*frame,lease,error);
+        [e endEncoding];
+      }
+      if(success&&!transfers.empty()) {
+        id<MTLBlitCommandEncoder> blit=impl_->BlitEncoder(command);if(!blit)return Fail(error,"Native blit encoder creation failed");++counters.blit_encoders;
+        for(size_t i:transfers)if(success)success=impl_->Transfer(blit,frame->commands[i],lease,error);
+        [blit endEncoding];
+      }
+      index=end-1;
+    }
     if(!success)return false;
   }
   counters.encode_ns+=elapsed();
