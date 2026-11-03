@@ -118,6 +118,14 @@ bool RexTextures::Swap(SurfaceView& out,uint32_t& swizzle,std::string& error) {
   if(!texture || !LoadTextureData(*texture) || !Declare(texture->image)) {error=failure_;return false;}
   texture->MarkAsUsed();out={texture->image.id};swizzle=GuestToHostSwizzle(fetch.swizzle,GetHostFormatSwizzle(key));return true;
 }
+void RexTextures::NoteResolved(uint32_t start,uint32_t length) {
+  resolved_.emplace_back(start,length);if(resolved_.size()>512)resolved_.pop_front();
+}
+std::vector<std::pair<std::string,uint32_t>> RexTextures::TakeLoadShapes(size_t top) {
+  std::vector<std::pair<std::string,uint32_t>> shapes(load_shapes_.begin(),load_shapes_.end());load_shapes_.clear();
+  std::sort(shapes.begin(),shapes.end(),[](const auto& a,const auto& b){return a.second>b.second;});
+  if(shapes.size()>top)shapes.resize(top);return shapes;
+}
 bool RexTextures::LoadTextureDataFromResidentMemoryImpl(Texture& texture,bool base,bool mips) {
   if(!frame_ || faulted())return false;
   const bool loaded=Load(static_cast<NativeTexture&>(texture),base,mips);
@@ -154,6 +162,11 @@ bool RexTextures::Load(NativeTexture& texture,bool load_base,bool load_mips) {
   }
   if(format.block_compressed)++stats_.native_bc;else ++stats_.uncompressed;
   stats_.staging_bytes+=plan.size;
+  const uint32_t base=key.base_page<<12;
+  const bool resolved=std::any_of(resolved_.begin(),resolved_.end(),[&](const auto& r){return base>=r.first&&base-r.first<r.second;});
+  ++load_shapes_["fmt="+std::to_string(uint32_t(key.format))+" "+std::to_string(key.GetWidth())+"x"+std::to_string(key.GetHeight())+
+    (key.tiled?" tiled":" linear")+" endian="+std::to_string(uint32_t(key.endianness))+" levels="+std::to_string(key.mip_max_level+1)+
+    (load_base?"":" mips-only")+(resolved?" from-resolve":"")];
   ++texture.loaded;texture.MarkAsUsed();return true;
 }
 } // namespace rex::native

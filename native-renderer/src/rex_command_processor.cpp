@@ -98,6 +98,7 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
   RexTextures::LoadStats last_texture_stats_{};
   // Every 60th guest frame is GPU-profiled when performance metrics are on.
   bool profile_frame_=false;uint32_t profiled_frames_=0;
+  std::map<std::string,uint32_t> resolve_shapes_; // Diagnostics, logged every 120 swaps.
 };
 bool NativeCommandProcessor::SetupContext() {
   if(!CommandProcessor::SetupContext())return false;
@@ -292,6 +293,13 @@ bool NativeCommandProcessor::IssueCopy() {
   service_->performance.RecordResolveCall();
   std::string error;if(!Begin(error))return Fail(error);uint32_t address=0,length=0;
   if(!targets_->Resolve(*frame_,*memory_,*shared_,*textures_,address,length,error))return Fail(error);
+  if(length) {
+    textures_->NoteResolved(address,length);
+    const auto dest=register_file_->Get<gfx::reg::RB_COPY_DEST_INFO>();const auto control=register_file_->Get<gfx::reg::RB_COPY_CONTROL>();
+    ++resolve_shapes_["src="+std::string(control.copy_src_select==4?"depth":"color"+std::to_string(control.copy_src_select))+
+      " dest_fmt="+std::to_string(uint32_t(dest.copy_dest_format))+" endian="+std::to_string(uint32_t(dest.copy_dest_endian))+
+      " bias="+std::to_string(int32_t(dest.copy_dest_exp_bias))+" KiB="+std::to_string((length+1023)>>10)];
+  }
   if(length&&GetReadbackResolveMode(false)!=gfx::ReadbackResolveMode::kDisabled&&!Readback(address,length,error))return Fail(error);
   return true;
 }
@@ -346,6 +354,10 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
     REXLOG_INFO("Native texture loads last 120 swaps: BC={} uncompressed={} staging_KiB={}",loads.native_bc-last_texture_stats_.native_bc,
       loads.uncompressed-last_texture_stats_.uncompressed,(loads.staging_bytes-last_texture_stats_.staging_bytes)>>10);
     last_texture_stats_=loads;
+    for(const auto& [shape,count]:textures_->TakeLoadShapes(8))REXLOG_INFO("Native texture load shape x{}: {}",count,shape);
+    std::vector<std::pair<std::string,uint32_t>> resolves(resolve_shapes_.begin(),resolve_shapes_.end());resolve_shapes_.clear();
+    std::sort(resolves.begin(),resolves.end(),[](const auto& a,const auto& b){return a.second>b.second;});
+    for(size_t i=0;i<std::min<size_t>(8,resolves.size());++i)REXLOG_INFO("Native resolve shape x{}: {}",resolves[i].second,resolves[i].first);
   }
   if(auto* presenter=graphics_system_->presenter())presenter->RefreshGuestOutput(width,height,width,height,[image](ui::Presenter::GuestOutputRefreshContext& c) {
     auto& context=static_cast<NativeRefreshContext&>(c);context.output=image;context.SetIs8bpc(true);return true;

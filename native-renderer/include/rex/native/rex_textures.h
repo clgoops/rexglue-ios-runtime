@@ -4,6 +4,10 @@
 #include "rex_draw_state.h"
 #include "lru.h"
 #include <rex/graphics/pipeline/texture/cache.h>
+#include <deque>
+#include <map>
+#include <string>
+#include <vector>
 namespace rex::native {
 class RexTextures final:public graphics::TextureCache {
  public:
@@ -18,6 +22,10 @@ class RexTextures final:public graphics::TextureCache {
   struct LoadPlan {uint64_t size=0;std::vector<LoadStep> loads;std::vector<BufferToTexture> copies;};
   struct LoadStats {uint64_t native_bc=0,uncompressed=0,staging_bytes=0;};
   LoadStats load_stats() const {return stats_;}
+  // Diagnostics: counts loads by guest shape, marking textures whose base lies
+  // in a recently resolved range, and returns the most frequent shapes.
+  void NoteResolved(uint32_t start,uint32_t length);
+  std::vector<std::pair<std::string,uint32_t>> TakeLoadShapes(size_t top);
   static bool PlanLoad(Key,const graphics::texture_util::TextureGuestLayout&,const LoadInfo&,
       HostFormat,bool base,bool mips,LoadPlan&,std::string&);
   static const LoadInfo& LoadMetadata(LoadIndex index) {return GetLoadShaderInfo(index);}
@@ -57,6 +65,8 @@ class RexTextures final:public graphics::TextureCache {
   Frame* frame_=nullptr;
   bool native_bc_=false;
   LoadStats stats_{};
+  std::map<std::string,uint32_t> load_shapes_;
+  std::deque<std::pair<uint32_t,uint32_t>> resolved_;
   std::string failure_;
   Lru<uint32_t,ConvertedShader> kernels_;
   std::array<std::optional<Surface>,3> nulls_;
