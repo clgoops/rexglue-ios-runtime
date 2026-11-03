@@ -25,6 +25,7 @@ class NativeService:public std::enable_shared_from_this<NativeService> {
   graphics::PerformanceStats performance;
   std::atomic<uint64_t> completed{0};
   std::atomic<bool> failed{false};
+  std::atomic<uint32_t> ui_pending{0}; // Accepted UI packets not yet completed.
  private:
   std::atomic<uint64_t> next_{1};
   uint64_t sequence_=0;

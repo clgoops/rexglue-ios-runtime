@@ -96,6 +96,8 @@ class NativeCommandProcessor final:public gfx::CommandProcessor {
   Shader swap_vs_,swap_fs_;Pipeline swap_pipeline_;std::array<std::optional<Surface>,3> output_;uint32_t output_index_=0;
   BackendStats last_stats_{};
   RexTextures::LoadStats last_texture_stats_{};
+  // Every 60th guest frame is GPU-profiled when performance metrics are on.
+  bool profile_frame_=false;uint32_t profiled_frames_=0;
 };
 bool NativeCommandProcessor::SetupContext() {
   if(!CommandProcessor::SetupContext())return false;
@@ -138,7 +140,7 @@ void NativeCommandProcessor::ShutdownContext() {
 }
 bool NativeCommandProcessor::Begin(std::string& error) {
   if(service_->failed) {error="native Metal session stopped";return false;}if(frame_)return true;
-  frame_=std::make_shared<Frame>();if(!shared_->BeginFrame(*frame_,error))return false;
+  frame_=std::make_shared<Frame>();frame_->profile=profile_frame_;if(!shared_->BeginFrame(*frame_,error))return false;
   // Submission indices here describe guest cache lifetime, independently of UI
   // queue submissions. Queue completion of any later UI packet also retires it.
   textures_->BeginNativeFrame(*frame_,++submission_,guest_completed_->load());primitives_->BeginNativeFrame(*frame_);return true;
@@ -311,6 +313,8 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
   draw.bindings[1].textures={{0,source}};draw.bindings[1].buffers={{0,{constants.id,0,sizeof(gamma)}}};pass.commands.push_back(std::move(draw));AppendPass(*frame_,std::move(pass));
   if(!Flush(error)) {Fail(error);return;}
   targets_->ClearCache();
+  // Profile the command buffers of the next complete guest frame.
+  profiled_frames_+=profile_frame_;profile_frame_=(output_index_%60)==0;
   if((output_index_%120)==0) {
     auto stats=service_->backend.Stats();
     REXLOG_INFO("Native Metal surface storage: {} MiB; guest submissions {}",stats.surface_bytes>>20,submission_);
@@ -319,7 +323,20 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
       stats.passes-last_stats_.passes,stats.inline_uploads-last_stats_.inline_uploads,
       (stats.inline_upload_bytes-last_stats_.inline_upload_bytes)>>10,
       double(stats.render_area_pixels-last_stats_.render_area_pixels)/1e6,double(stats.render_area_used_pixels-last_stats_.render_area_used_pixels)/1e6);
+    auto per_swap=[](uint64_t now,uint64_t before){return double(now-before)/1e6/120;};
+    REXLOG_INFO("Native Metal CPU ms/swap: slot_wait={:.1f} prepare={:.1f} encode={:.1f} drawable_wait={:.1f} submits/swap={:.1f} presents/swap={:.2f}",
+      per_swap(stats.slot_wait_ns,last_stats_.slot_wait_ns),per_swap(stats.prepare_ns,last_stats_.prepare_ns),
+      per_swap(stats.encode_ns,last_stats_.encode_ns),per_swap(stats.drawable_wait_ns,last_stats_.drawable_wait_ns),
+      double(stats.submitted-last_stats_.submitted)/120,double(stats.presents-last_stats_.presents)/120);
     last_stats_=stats;
+    const auto gpu=service_->backend.TakeGpuProfile();const auto frames=std::exchange(profiled_frames_,0u);
+    if(gpu.command_buffers&&frames) {
+      REXLOG_INFO("Native GPU profile ms/frame ({} sampled frames, {} buffers): window={:.1f} render={:.1f} (vertex={:.1f} fragment={:.1f}) resolve={:.1f} compute={:.1f} blit={:.1f} encoders={:.0f} unsampled={}",
+        frames,gpu.command_buffers,gpu.window_ms/frames,gpu.render_ms/frames,gpu.vertex_ms/frames,gpu.fragment_ms/frames,
+        gpu.resolve_ms/frames,gpu.compute_ms/frames,gpu.blit_ms/frames,double(gpu.encoders)/frames,gpu.unsampled_encoders);
+      for(const auto& p:gpu.slowest)if(p.ms>0)
+        REXLOG_INFO("Native GPU slow pass: {:.2f} ms {}x{} samples={} draws={} colors={} depth={} loads={}",p.ms,p.width,p.height,p.samples,p.draws,p.colors,p.depth,p.loads);
+    } else if(gpu.unavailable) REXLOG_INFO("Native GPU profile unavailable: {}",gpu.reason);
     const auto loads=textures_->load_stats();
     REXLOG_INFO("Native texture loads last 120 swaps: BC={} uncompressed={} staging_KiB={}",loads.native_bc-last_texture_stats_.native_bc,
       loads.uncompressed-last_texture_stats_.uncompressed,(loads.staging_bytes-last_texture_stats_.staging_bytes)>>10);

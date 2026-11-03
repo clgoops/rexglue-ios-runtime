@@ -266,5 +266,31 @@ int main(){@autoreleasepool {
     for(unsigned i=0;i<256;++i) {uint32_t value;std::memcpy(&value,bytes.data()+i*4,4);Check(value==1);}
     Done("attachmentless fragment memory export with explicit raster dimensions");
   }
+  {
+    // A profiled frame renders identically and either reports encoder timing or
+    // records why counters are unavailable (virtual GPUs may lack them).
+    MetalBackend backend;backend.SetTimingEnabled(true);auto f=Triangle();f.buffers.clear();f.buffer_storage.push_back({Id(500),16,true,std::make_shared<const int>(1)});BufferUpload upload{{Id(500),0,16},Data(std::array<float,4>{})};
+    Shader shader;shader.id=Id(102);shader.stage=Stage::Compute;shader.entry="compute_main";shader.arguments={{ArgumentKind::Buffer,0,1,16,16,TextureKind::TwoD,false,true}};shader.msl="#include <metal_stdlib>\nusing namespace metal;kernel void compute_main(device float4* data[[buffer(0)]]){data[0]=float4(0,1,0,1);}";f.shaders.push_back(shader);
+    Dispatch d;d.shader=shader.id;d.bindings.buffers={{0,{Id(500),0,16}}};auto& draw=std::get<Draw>(std::get<Pass>(f.commands[0]).commands[0]);draw.bindings[1].buffers={{0,{Id(500),0,16}}};f.commands.insert(f.commands.begin(),d);f.commands.insert(f.commands.begin(),upload);
+    f.surfaces.push_back(Target(2,Format::RGBA8,4));f.surfaces.push_back(Target(3));f.commands.emplace_back(ColorPass(2,{0,0,1,1},4));f.commands.emplace_back(Resolve{View(2),View(3),ResolveFilter::Average});
+    f.profile=true;Submit(backend,std::move(f));Pixel(backend,View(1),8,8,{0,255,0,255});Pixel(backend,View(3),8,8,{0,0,255,255});
+    auto profile=backend.TakeGpuProfile();Check(profile.command_buffers+profile.unavailable==1);
+    if(profile.command_buffers) {
+      Check(profile.encoders==5&&profile.unsampled_encoders==0&&profile.window_ms>0);
+      uint32_t draws=0;for(const auto& pass:profile.slowest)draws+=pass.draws;Check(draws<=1&&profile.render_ms>=0);
+      std::cout<<"GPU profile: window="<<profile.window_ms<<" render="<<profile.render_ms<<" resolve="<<profile.resolve_ms<<" compute="<<profile.compute_ms<<" blit="<<profile.blit_ms<<std::endl;
+    } else std::cout<<"GPU profile unavailable: "<<profile.reason<<std::endl;
+    Check(backend.TakeGpuProfile().command_buffers==0);
+    auto plain=Triangle(2,Target(4));Submit(backend,std::move(plain));auto none=backend.TakeGpuProfile();Check(none.command_buffers==0&&none.unavailable==0);
+    Check(backend.Stats().slot_wait_ns>0||backend.Stats().prepare_ns>0);Done("sampled stage-boundary GPU profile preserves rendered pixels");
+  }
+  {
+    BackendOptions six;six.maximum_frames=6;MetalBackend backend(six);std::string ready;Check(backend.Ready(ready));
+    const auto base=Triangle();
+    for(uint64_t s=1;s<=24;++s) {auto f=base;f.sequence=s;Check(backend.Submit(std::make_shared<const Frame>(std::move(f)),{},failure));}
+    Check(backend.Drain(std::chrono::seconds(30),failure));Check(backend.Stats().completed==24);Pixel(backend,View(1),8,8,{255,0,0,255});
+    BackendOptions nine;nine.maximum_frames=9;MetalBackend rejected(nine);Check(!rejected.Ready(ready));
+    Done("six frames in flight retire in order and the slot limit stays bounded");
+  }
   std::cout<<cases<<" native GPU cases and "<<checks<<" checks passed"<<std::endl;
 }}

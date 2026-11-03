@@ -8,7 +8,9 @@
 
 namespace rex::native {
 namespace {
-BackendOptions Options() {BackendOptions o;o.surface_budget=1280ull<<20;o.mutable_buffer_budget=768ull<<20;o.letterbox=REXCVAR_GET(present_letterbox);return o;}
+// A guest frame spans several command buffers. Six slots let the frontend
+// encode the next frame while the GPU executes the previous one.
+BackendOptions Options() {BackendOptions o;o.maximum_frames=6;o.surface_budget=1280ull<<20;o.mutable_buffer_budget=768ull<<20;o.letterbox=REXCVAR_GET(present_letterbox);return o;}
 Surface Target(NativeService& service,uint32_t w,uint32_t h) {
   Surface s;s.id=service.Next();s.width=w;s.height=h;s.format=Format::RGBA8;s.renderable=true;
   s.owner=std::make_shared<const Identity>(s.id);return s;
@@ -39,6 +41,10 @@ class NativePresenter final:public ui::Presenter {
   }
   PaintResult PaintAndPresentImpl(bool ui) override {
     if(service_->failed)return PaintResult::kNotPresented;
+    // UI paints run at display rate and queue behind guest GPU work. Keep at
+    // most two in flight so they cannot occupy the guest frame slots; the next
+    // paint shows the newest guest image.
+    if(service_->ui_pending.load()>=2)return PaintResult::kNotPresented;
     uint32_t index;auto consumed=ConsumeGuestOutput(index,nullptr,nullptr);Surface image;
     if(index!=UINT32_MAX) {std::lock_guard lock(mailbox_mutex_);image=mailbox_[index];}consumed.unlock();
     if(!image.id)return PaintResult::kNotPresented;
@@ -77,11 +83,14 @@ void NativeService::Fail(const std::string& error) {if(!failed.exchange(true))RE
 bool NativeService::Submit(std::shared_ptr<Frame> frame,std::string& error,std::function<void()> completed_callback) {
   std::lock_guard lock(mutex);if(failed) {error="native Metal session has failed";return false;}frame->sequence=++sequence_;
   const bool guest=bool(completed_callback);const auto before=backend.Stats();
-  auto weak=weak_from_this();bool accepted=backend.Submit(std::move(frame),[weak,done=std::move(completed_callback)](Completion result) {
+  if(!guest)ui_pending.fetch_add(1);
+  auto weak=weak_from_this();bool accepted=backend.Submit(std::move(frame),[weak,guest,done=std::move(completed_callback)](Completion result) {
     if(auto self=weak.lock()) {if(!result.success)self->Fail(result.error);self->completed.store(result.sequence);
+      if(!guest)self->ui_pending.fetch_sub(1);
       if(done&&result.timing_available) {self->performance.SetGpuTimingSupported(true);self->performance.RecordGpuSubmission(uint64_t(result.native_window_ms*1e6));}}
     if(result.success&&done)done();
   },error);
+  if(!accepted&&!guest)ui_pending.fetch_sub(1);
   if(accepted&&guest) {
     const auto after=backend.Stats();performance.RecordRenderAreas(after.passes-before.passes,after.reduced_passes-before.reduced_passes,
       after.render_area_pixels-before.render_area_pixels,after.render_area_used_pixels-before.render_area_used_pixels);

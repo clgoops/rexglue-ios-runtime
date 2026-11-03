@@ -32,6 +32,21 @@ struct BackendStats {
   uint64_t surface_bytes=0,geometry_bytes=0,constant_bytes=0;
   uint64_t surface_allocations=0,inline_uploads=0,inline_upload_bytes=0;
   uint64_t reduced_passes=0,render_area_pixels=0,render_area_used_pixels=0;
+  // CPU wall time inside Submit: frame-slot wait, resource preparation,
+  // command encoding and drawable acquisition. Presents counts display passes.
+  uint64_t slot_wait_ns=0,prepare_ns=0,encode_ns=0,drawable_wait_ns=0,presents=0;
+};
+// Sampled stage-boundary timestamps for frames submitted with Frame::profile.
+// Encoder windows can overlap on tile-based GPUs, so category sums may exceed
+// the command-buffer window. Milliseconds are calibrated to GPUStart/EndTime.
+struct GpuPassSample {
+  double ms=0;uint32_t width=0,height=0,samples=1,draws=0,colors=0;bool depth=false,loads=false;
+};
+struct GpuProfile {
+  uint64_t command_buffers=0,encoders=0,unsampled_encoders=0,unavailable=0;
+  double window_ms=0,render_ms=0,vertex_ms=0,fragment_ms=0,resolve_ms=0,compute_ms=0,blit_ms=0;
+  std::array<GpuPassSample,5> slowest{};
+  std::string reason;
 };
 struct Capabilities {uint64_t max_buffer_length=0;bool float32_filtering=false,packed_16bit_textures=false,bc_texture_compression=false;};
 class MetalBackend {
@@ -49,6 +64,8 @@ class MetalBackend {
   // locks; presentation must not pass through this CPU path.
   std::vector<std::byte> ReadRGBA8(const SurfaceView&,std::string& error);
   BackendStats Stats() const;
+  // Returns profiles completed since the previous call and resets them.
+  GpuProfile TakeGpuProfile();
   Capabilities GetDeviceCapabilities() const;
   void SetTimingEnabled(bool enabled);
   // Production activation requires a physical Apple9+ GPU and isolated pixel

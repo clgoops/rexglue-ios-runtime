@@ -240,6 +240,9 @@ struct Frame {
   // frontend passes. An sRGB allocation can provide an unorm output view to
   // avoid applying a second transfer function during presentation.
   std::optional<SurfaceView> output;
+  // Request sampled per-encoder GPU timestamps when backend timing is enabled.
+  // Rendering is unchanged; unsupported devices report the profile unavailable.
+  bool profile=false;
 };
 struct Limits {
   uint32_t max_dimension=16384,max_texture_slots=128,max_sampler_slots=16,max_buffer_slots=31;

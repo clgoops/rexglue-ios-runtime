@@ -138,7 +138,42 @@ struct SharedState {
   std::mutex mutex;std::condition_variable changed;
   uint32_t pending=0;bool lost=false;std::string loss;
   BackendStats stats;
+  GpuProfile profile;
 };
+// One sampled command buffer. Render encoders use four stage-boundary samples
+// (vertex start/end, fragment start/end); compute and blit encoders use two.
+enum class EncoderKind:uint8_t {Render,Resolve,Compute,Blit};
+struct EncoderSample {EncoderKind kind;uint32_t index;GpuPassSample pass;};
+struct GpuProfiler {
+  id<MTLCounterSampleBuffer> buffer=nil;uint32_t capacity=0,used=0;uint64_t unsampled=0;
+  std::vector<EncoderSample> encoders;
+  uint32_t Reserve(uint32_t count){if(used+count>capacity){++unsampled;return UINT32_MAX;}auto base=used;used+=count;return base;}
+};
+// Converts resolved timestamps to milliseconds using the command buffer's own
+// GPU window, so the result does not depend on the device's tick period.
+void Accumulate(GpuProfile& out,const GpuProfiler& p,NSData* data,double window_ms){
+  const auto* values=static_cast<const MTLCounterResultTimestamp*>(data.bytes);
+  const size_t count=std::min<size_t>(data.length/sizeof(MTLCounterResultTimestamp),p.used);
+  auto valid=[&](uint32_t i){return i<count&&values[i].timestamp!=MTLCounterErrorValue&&values[i].timestamp!=0;};
+  uint64_t first=UINT64_MAX,last=0;
+  for(size_t i=0;i<count;++i)if(valid(uint32_t(i))){first=std::min(first,values[i].timestamp);last=std::max(last,values[i].timestamp);}
+  if(last<=first){++out.unavailable;if(out.reason.empty())out.reason="timestamps did not advance";return;}
+  ++out.command_buffers;out.window_ms+=window_ms;out.unsampled_encoders+=p.unsampled;
+  const double scale=window_ms/double(last-first);
+  auto span=[&](uint32_t a,uint32_t b){return valid(a)&&valid(b)&&values[b].timestamp>=values[a].timestamp?double(values[b].timestamp-values[a].timestamp)*scale:0.0;};
+  for(const auto& e:p.encoders){
+    ++out.encoders;
+    if(e.kind==EncoderKind::Compute||e.kind==EncoderKind::Blit){(e.kind==EncoderKind::Compute?out.compute_ms:out.blit_ms)+=span(e.index,e.index+1);continue;}
+    uint64_t begin=UINT64_MAX,end=0;
+    for(uint32_t i=0;i<4;++i)if(valid(e.index+i)){begin=std::min(begin,values[e.index+i].timestamp);end=std::max(end,values[e.index+i].timestamp);}
+    const double total=end>begin?double(end-begin)*scale:0;
+    if(e.kind==EncoderKind::Resolve){out.resolve_ms+=total;continue;}
+    out.render_ms+=total;out.vertex_ms+=span(e.index,e.index+1);out.fragment_ms+=span(e.index+2,e.index+3);
+    auto pass=e.pass;pass.ms=total;
+    auto slot=std::min_element(out.slowest.begin(),out.slowest.end(),[](const auto& a,const auto& b){return a.ms<b.ms;});
+    if(pass.ms>slot->ms)*slot=pass;
+  }
+}
 struct FrameLease {
   std::shared_ptr<const Frame> frame;
   std::shared_ptr<SharedState> state;
@@ -197,12 +232,49 @@ struct MetalBackend::Impl {
   std::string startup_error;
   id<MTLRenderPipelineState> present_pipeline=nil;
   MTLPixelFormat present_format=MTLPixelFormatInvalid;
+  std::shared_ptr<GpuProfiler> profiler; // Set only while encoding a profiled frame.
+  id<MTLCounterSet> timestamp_counters=nil;bool profiling_checked=false;std::string profiling_unavailable;
   explicit Impl(BackendOptions o):options(o){
     if(!device){startup_error="No native Metal device is available";return;}
-    if(!options.maximum_frames||options.maximum_frames>3||!options.maximum_pipelines||!options.maximum_shaders||!options.maximum_samplers){startup_error="Invalid native backend limits";return;}
+    if(!options.maximum_frames||options.maximum_frames>8||!options.maximum_pipelines||!options.maximum_shaders||!options.maximum_samplers){startup_error="Invalid native backend limits";return;}
     queue=[device newCommandQueue];if(!queue){startup_error="Metal command queue creation failed";return;}
     queue.label=@"ReX native ordered frames";
     pool->geometry_limit=options.geometry_budget;pool->constant_limit=options.constant_budget;
+  }
+  // Returns a sampler for a profiled frame, or records why none is available.
+  std::shared_ptr<GpuProfiler> Profiler(const Frame& frame){
+    if(!profiling_checked){
+      profiling_checked=true;
+      if(![device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])profiling_unavailable="stage-boundary counter sampling is unsupported";
+      else for(id<MTLCounterSet> set in device.counterSets)if([set.name isEqualToString:MTLCommonCounterSetTimestamp])timestamp_counters=set;
+      if(!timestamp_counters&&profiling_unavailable.empty())profiling_unavailable="timestamp counters are unavailable";
+    }
+    auto unavailable=[&](std::string reason)->std::shared_ptr<GpuProfiler>{
+      std::lock_guard lock(state->mutex);++state->profile.unavailable;if(state->profile.reason.empty())state->profile.reason=std::move(reason);return nullptr;};
+    if(!timestamp_counters)return unavailable(profiling_unavailable);
+    auto p=std::make_shared<GpuProfiler>();p->capacity=uint32_t(std::min<size_t>(2048,frame.commands.size()*4+4));
+    auto desc=[MTLCounterSampleBufferDescriptor new];desc.counterSet=timestamp_counters;desc.storageMode=MTLStorageModeShared;desc.sampleCount=p->capacity;
+    NSError* failure=nil;p->buffer=[device newCounterSampleBufferWithDescriptor:desc error:&failure];
+    if(!p->buffer)return unavailable(failure?DescribeError(failure):"counter sample buffer creation failed");
+    return p;
+  }
+  size_t SampleRender(MTLRenderPassDescriptor* desc,EncoderKind kind,GpuPassSample pass){
+    const auto base=profiler?profiler->Reserve(4):UINT32_MAX;if(base==UINT32_MAX)return SIZE_MAX;
+    auto a=desc.sampleBufferAttachments[0];a.sampleBuffer=profiler->buffer;
+    a.startOfVertexSampleIndex=base;a.endOfVertexSampleIndex=base+1;a.startOfFragmentSampleIndex=base+2;a.endOfFragmentSampleIndex=base+3;
+    profiler->encoders.push_back({kind,base,pass});return profiler->encoders.size()-1;
+  }
+  id<MTLComputeCommandEncoder> ComputeEncoder(id<MTLCommandBuffer> cb){
+    const auto base=profiler?profiler->Reserve(2):UINT32_MAX;if(base==UINT32_MAX)return [cb computeCommandEncoder];
+    auto desc=[MTLComputePassDescriptor computePassDescriptor];auto a=desc.sampleBufferAttachments[0];
+    a.sampleBuffer=profiler->buffer;a.startOfEncoderSampleIndex=base;a.endOfEncoderSampleIndex=base+1;
+    profiler->encoders.push_back({EncoderKind::Compute,base,{}});return [cb computeCommandEncoderWithDescriptor:desc];
+  }
+  id<MTLBlitCommandEncoder> BlitEncoder(id<MTLCommandBuffer> cb){
+    const auto base=profiler?profiler->Reserve(2):UINT32_MAX;if(base==UINT32_MAX)return [cb blitCommandEncoder];
+    auto desc=[MTLBlitPassDescriptor blitPassDescriptor];auto a=desc.sampleBufferAttachments[0];
+    a.sampleBuffer=profiler->buffer;a.startOfEncoderSampleIndex=base;a.endOfEncoderSampleIndex=base+1;
+    profiler->encoders.push_back({EncoderKind::Blit,base,{}});return [cb blitCommandEncoderWithDescriptor:desc];
   }
   void Snapshot(){
     counters.surface_bytes=surface_bytes;
@@ -621,6 +693,10 @@ struct MetalBackend::Impl {
     }
     if(pass.depth){auto a=*pass.depth;a.store=last.depth->store;Attachment(desc.depthAttachment,a,error);if(!desc.depthAttachment.texture)return false;desc.depthAttachment.clearDepth=pass.depth->depth;}
     if(pass.stencil){auto a=*pass.stencil;a.store=last.stencil->store;Attachment(desc.stencilAttachment,a,error);if(!desc.stencilAttachment.texture)return false;desc.stencilAttachment.clearStencil=pass.stencil->stencil;}
+    GpuPassSample sample;sample.width=area.width;sample.height=area.height;sample.samples=pass.samples;sample.depth=bool(pass.depth);
+    for(const auto& c:pass.colors)if(c){++sample.colors;sample.loads|=c->load==Load::Load;}
+    if(pass.depth)sample.loads|=pass.depth->load==Load::Load;
+    const size_t sampled=SampleRender(desc,EncoderKind::Render,sample);const auto draws=counters.draws;
     id<MTLRenderCommandEncoder> e=[cb renderCommandEncoderWithDescriptor:desc];if(!e)return Fail(error,"Native render encoder creation failed");
     EncoderBindings bindings;bool success=true;
     for(size_t i=begin;i<end&&success;++i) {
@@ -631,7 +707,8 @@ struct MetalBackend::Impl {
         if(!success)break;
       }
     }
-    [e endEncoding];++counters.passes;counters.render_area_pixels+=uint64_t(pass.width)*pass.height;
+    [e endEncoding];if(sampled!=SIZE_MAX)profiler->encoders[sampled].pass.draws=uint32_t(counters.draws-draws);
+    ++counters.passes;counters.render_area_pixels+=uint64_t(pass.width)*pass.height;
     counters.render_area_used_pixels+=uint64_t(area.width)*area.height;
     if(area.width!=pass.width||area.height!=pass.height)++counters.reduced_passes;return success;
   }
@@ -649,7 +726,7 @@ struct MetalBackend::Impl {
     }
     if(uint64_t(d.threads[0])*d.threads[1]*d.threads[2]>cached->pipeline.maxTotalThreadsPerThreadgroup)return Fail(error,"Compute threadgroup exceeds the compiled pipeline limit");
     if(!ActualBuffers(d.bindings,cached->arguments,error))return false;
-    lease->gpu.push_back(cached->pipeline);id<MTLComputeCommandEncoder> e=[cb computeCommandEncoder];if(!e)return Fail(error,"Native compute encoder creation failed");
+    lease->gpu.push_back(cached->pipeline);id<MTLComputeCommandEncoder> e=ComputeEncoder(cb);if(!e)return Fail(error,"Native compute encoder creation failed");
     [e setComputePipelineState:cached->pipeline];
     for(const auto& b:d.bindings.buffers)[e setBuffer:BufferAt(b.view) offset:b.view.offset atIndex:b.index];
     for(const auto& t:d.bindings.textures){auto texture=Texture(t.view,true,error);if(!texture){[e endEncoding];return false;}lease->gpu.push_back(texture);[e setTexture:texture atIndex:t.index];}
@@ -657,7 +734,7 @@ struct MetalBackend::Impl {
     [e dispatchThreadgroups:MTLSizeMake(d.groups[0],d.groups[1],d.groups[2]) threadsPerThreadgroup:MTLSizeMake(d.threads[0],d.threads[1],d.threads[2])];[e endEncoding];return true;
   }
   bool Transfer(id<MTLCommandBuffer> cb,const Command& command,std::shared_ptr<FrameLease> lease,std::string& error){
-    id<MTLBlitCommandEncoder> blit=[cb blitCommandEncoder];if(!blit)return Fail(error,"Native blit encoder creation failed");
+    id<MTLBlitCommandEncoder> blit=BlitEncoder(cb);if(!blit)return Fail(error,"Native blit encoder creation failed");
     bool success=true;
     if(const auto* upload=std::get_if<BufferUpload>(&command)){
       id<MTLBuffer> source=[device newBufferWithBytes:upload->bytes->data() length:upload->bytes->size() options:MTLResourceStorageModeShared];
@@ -708,14 +785,18 @@ struct MetalBackend::Impl {
       stencil.loadAction=MTLLoadActionLoad;stencil.storeAction=MTLStoreActionStoreAndMultisampleResolve;
       stencil.stencilResolveFilter=r.filter==ResolveFilter::SampleZero?MTLMultisampleStencilResolveFilterSample0:MTLMultisampleStencilResolveFilterDepthResolvedSample;
     }
+    SampleRender(desc,EncoderKind::Resolve,{});
     id<MTLRenderCommandEncoder> e=[cb renderCommandEncoderWithDescriptor:desc];if(!e)return Fail(error,"Native resolve encoder creation failed");[e endEncoding];++counters.resolves;return true;
   }
   bool Present(id<MTLCommandBuffer> cb,const Frame& frame,std::shared_ptr<FrameLease> lease,std::string& error){
     if(!layer||!frame.output)return true;
+    const auto requested=std::chrono::steady_clock::now();
     id<CAMetalDrawable> drawable=[layer nextDrawable];
+    counters.drawable_wait_ns+=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-requested).count());
     // UIKit may stop supplying drawables while inactive. Do not substitute a
     // CPU readback or destroy the offscreen frame contents in that case.
     if(!drawable)return true;
+    ++counters.presents;
     if(!present_pipeline||present_format!=drawable.texture.pixelFormat){
       NSString* source=@"#include <metal_stdlib>\nusing namespace metal;struct V{float4 p[[position]];float2 uv;};vertex V present_vs(uint i[[vertex_id]]){float2 p=float2((i<<1)&2,i&2);return V{float4(p*2-1,0,1),float2(p.x,1-p.y)};}fragment float4 present_ps(V v[[stage_in]],texture2d<float> image[[texture(0)]]){constexpr sampler s(filter::linear,address::clamp_to_edge);return image.sample(s,v.uv);}";
       auto options=[MTLCompileOptions new];options.fastMathEnabled=NO;NSError* failure=nil;
@@ -743,16 +824,23 @@ bool MetalBackend::Submit(std::shared_ptr<const Frame> frame,std::function<void(
   if(!Ready(error))return false;
   if(!frame||!Validate(*frame,error))return false;
   if(frame->sequence<=impl_->last_sequence)return Fail(error,"Native frame sequence did not advance");
-  auto state=impl_->state;
+  auto state=impl_->state;auto& counters=impl_->counters;auto mark=std::chrono::steady_clock::now();
+  auto elapsed=[&mark]{const auto now=std::chrono::steady_clock::now();const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(now-mark).count();mark=now;return uint64_t(ns);};
   {
     std::unique_lock lock(state->mutex);
     if(!state->changed.wait_for(lock,std::chrono::seconds(5),[&]{return state->pending<impl_->options.maximum_frames||state->lost;}))return Fail(error,"Native frame slots did not retire within five seconds");
     if(state->lost){error=state->loss;return false;}
     ++state->pending;
   }
+  counters.slot_wait_ns+=elapsed();
   auto lease=std::make_shared<FrameLease>();lease->frame=frame;lease->state=state;
   if(!impl_->Prepare(*frame,lease,error))return false;
+  counters.prepare_ns+=elapsed();
   id<MTLCommandBuffer> command=[impl_->queue commandBuffer];if(!command)return Fail(error,"Native command buffer creation failed");
+  // Encoder sampling is confined to this frame, including early failure returns.
+  impl_->profiler=impl_->options.timing&&frame->profile?impl_->Profiler(*frame):nullptr;
+  struct ProfilerScope {std::shared_ptr<GpuProfiler>& active;~ProfilerScope(){active.reset();}} scope{impl_->profiler};
+  const auto profiler=impl_->profiler;
   for(size_t index=0;index<frame->commands.size();++index){
     const auto& operation=frame->commands[index];
     bool success;
@@ -765,6 +853,7 @@ bool MetalBackend::Submit(std::shared_ptr<const Frame> frame,std::function<void(
     else success=impl_->Transfer(command,operation,lease,error);
     if(!success)return false;
   }
+  counters.encode_ns+=elapsed();
   if(!impl_->Present(command,*frame,lease,error))return false;
   const uint64_t sequence=frame->sequence;const bool timing=impl_->options.timing;
   [command addCompletedHandler:^(id<MTLCommandBuffer> buffer){
@@ -772,9 +861,12 @@ bool MetalBackend::Submit(std::shared_ptr<const Frame> frame,std::function<void(
     if(!result.success)result.error=DescribeError(buffer.error);
     if(timing&&result.success){const auto a=buffer.GPUStartTime,b=buffer.GPUEndTime;
       if(a>0&&b>=a){result.timing_available=true;result.native_window_ms=(b-a)*1000;}}
+    NSData* samples=profiler&&result.timing_available&&profiler->used?[profiler->buffer resolveCounterRange:NSMakeRange(0,profiler->used)]:nil;
     {
       std::lock_guard lock(state->mutex);++state->stats.completed;
       if(!result.success){state->lost=true;state->loss=result.error.empty()?"Native Metal command buffer failed":result.error;}
+      if(samples)Accumulate(state->profile,*profiler,samples,result.native_window_ms);
+      else if(profiler){++state->profile.unavailable;if(state->profile.reason.empty())state->profile.reason="no resolved timestamps";}
     }
     lease->Retire();
     if(completion)try{completion(std::move(result));}catch(...){NSLog(@"Native completion consumer threw an exception");}
@@ -787,6 +879,7 @@ bool MetalBackend::Drain(std::chrono::milliseconds timeout,std::string& error){
   if(state->lost){error=state->loss;return false;}error.clear();return true;
 }
 BackendStats MetalBackend::Stats() const {std::lock_guard lock(impl_->state->mutex);return impl_->state->stats;}
+GpuProfile MetalBackend::TakeGpuProfile() {std::lock_guard lock(impl_->state->mutex);return std::exchange(impl_->state->profile,{});}
 bool MetalBackend::AttachLayer(void* opaque,std::string& error){
   if(!Ready(error))return false;
   {std::lock_guard lock(impl_->state->mutex);if(impl_->state->pending)return Fail(error,"Drain before changing the presentation layer");}
