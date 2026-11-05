@@ -327,7 +327,8 @@ struct MetalBackend::Impl {
   void Snapshot(){
     counters.surface_bytes=surface_bytes;
     {std::lock_guard lock(pool->mutex);counters.geometry_bytes=pool->geometry;counters.constant_bytes=pool->constants;}
-    std::lock_guard lock(state->mutex);auto complete=state->stats.completed;state->stats=counters;state->stats.completed=complete;
+    std::lock_guard lock(state->mutex);auto complete=state->stats.completed,dropped=state->stats.dropped;
+    state->stats=counters;state->stats.completed=complete;state->stats.dropped=dropped;
   }
   void Sweep(bool full=false){
     const size_t surface_count=full?surfaces.size():std::min<size_t>(64,surfaces.size());
@@ -966,12 +967,14 @@ bool MetalBackend::Submit(std::shared_ptr<const Frame> frame,std::function<void(
   [command addCompletedHandler:^(id<MTLCommandBuffer> buffer){
     Completion result;result.sequence=sequence;result.success=buffer.status==MTLCommandBufferStatusCompleted;
     if(!result.success)result.error=DescribeError(buffer.error);
+    result.dropped=!result.success&&buffer.error&&[buffer.error.domain isEqualToString:MTLCommandBufferErrorDomain]&&buffer.error.code==MTLCommandBufferErrorNotPermitted;
     if(timing&&result.success){const auto a=buffer.GPUStartTime,b=buffer.GPUEndTime;
       if(a>0&&b>=a){result.timing_available=true;result.native_window_ms=(b-a)*1000;}}
     NSData* samples=profiler&&result.timing_available&&profiler->used?[profiler->buffer resolveCounterRange:NSMakeRange(0,profiler->used)]:nil;
     {
       std::lock_guard lock(state->mutex);++state->stats.completed;
-      if(!result.success){state->lost=true;state->loss=result.error.empty()?"Native Metal command buffer failed":result.error;}
+      if(result.dropped)++state->stats.dropped;
+      else if(!result.success){state->lost=true;state->loss=result.error.empty()?"Native Metal command buffer failed":result.error;}
       if(samples)Accumulate(state->profile,*profiler,samples,result.native_window_ms);
       else if(profiler){++state->profile.unavailable;if(state->profile.reason.empty())state->profile.reason="no resolved timestamps";}
     }

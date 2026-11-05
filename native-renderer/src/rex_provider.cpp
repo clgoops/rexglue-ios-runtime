@@ -96,10 +96,11 @@ bool NativeService::Submit(std::shared_ptr<Frame> frame,std::string& error,std::
   const bool guest=bool(completed_callback);const auto before=backend.Stats();
   if(!guest)ui_pending.fetch_add(1);
   auto weak=weak_from_this();bool accepted=backend.Submit(std::move(frame),[weak,guest,done=std::move(completed_callback)](Completion result) {
-    if(auto self=weak.lock()) {if(!result.success)self->Fail(result.error);self->completed.store(result.sequence);
+    // A packet refused while backgrounded loses its writes but not the session.
+    if(auto self=weak.lock()) {if(!result.success&&!result.dropped)self->Fail(result.error);self->completed.store(result.sequence);
       if(!guest)self->ui_pending.fetch_sub(1);
       if(done&&result.timing_available) {self->performance.SetGpuTimingSupported(true);self->performance.RecordGpuSubmission(uint64_t(result.native_window_ms*1e6));}}
-    if(result.success&&done)done();
+    if((result.success||result.dropped)&&done)done();
   },error);
   if(!accepted&&!guest)ui_pending.fetch_sub(1);
   if(accepted&&guest) {

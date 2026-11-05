@@ -325,7 +325,7 @@ void NativeCommandProcessor::IssueSwap(uint32_t,uint32_t width,uint32_t height) 
   profiled_frames_+=profile_frame_;profile_frame_=(output_index_%60)==0;
   if((output_index_%120)==0) {
     auto stats=service_->backend.Stats();
-    REXLOG_INFO("Native Metal surface storage: {} MiB; guest submissions {}",stats.surface_bytes>>20,submission_);
+    REXLOG_INFO("Native Metal surface storage: {} MiB; guest submissions {}; background-dropped packets {}",stats.surface_bytes>>20,submission_,stats.dropped);
     REXLOG_INFO("Native Metal last 120 swaps: allocations={} pipelines={} passes={} inline_uploads={} upload_KiB={} render_Mpix={:.1f}->{:.1f}",
       stats.surface_allocations-last_stats_.surface_allocations,stats.pipeline_compiles-last_stats_.pipeline_compiles,
       stats.passes-last_stats_.passes,stats.inline_uploads-last_stats_.inline_uploads,

@@ -22,6 +22,9 @@ struct BackendOptions {
 struct Completion {
   uint64_t sequence=0;
   bool success=false,timing_available=false;
+  // iOS refused the work because the app was in the background. The packet's
+  // GPU writes are lost, but the device and session remain usable.
+  bool dropped=false;
   double native_window_ms=0;
   std::string error;
 };
@@ -38,6 +41,7 @@ struct BackendStats {
   // Mutable (staging) buffers: fresh Metal allocations versus retired reuses.
   uint64_t storage_allocations=0,storage_reuses=0,compute_encoders=0,blit_encoders=0;
   uint64_t folded_clears=0; // Full-area leading clears encoded as load actions.
+  uint64_t dropped=0;       // Packets iOS refused while the app was in the background.
 };
 // Sampled stage-boundary timestamps for frames submitted with Frame::profile.
 // Encoder windows can overlap on tile-based GPUs, so category sums may exceed
