@@ -9,8 +9,12 @@
 namespace rex::native {
 namespace {
 // A guest frame spans several command buffers. Six slots let the frontend
-// encode the next frame while the GPU executes the previous one.
-BackendOptions Options() {BackendOptions o;o.maximum_frames=6;o.surface_budget=1280ull<<20;o.mutable_buffer_budget=768ull<<20;o.letterbox=REXCVAR_GET(present_letterbox);return o;}
+// encode the next frame while the GPU executes the previous one. Each pending
+// packet retains its constants and geometry, so those budgets scale with it.
+BackendOptions Options() {
+  BackendOptions o;o.maximum_frames=6;o.surface_budget=1280ull<<20;o.mutable_buffer_budget=768ull<<20;
+  o.geometry_budget=512ull<<20;o.constant_budget=64ull<<20;o.letterbox=REXCVAR_GET(present_letterbox);return o;
+}
 Surface Target(NativeService& service,uint32_t w,uint32_t h) {
   Surface s;s.id=service.Next();s.width=w;s.height=h;s.format=Format::RGBA8;s.renderable=true;
   s.owner=std::make_shared<const Identity>(s.id);return s;

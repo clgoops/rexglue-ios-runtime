@@ -450,7 +450,7 @@ struct MetalBackend::Impl {
         }
       }
       if(!buffer){
-        uint64_t limit=spec.constants?pool->constant_limit:pool->geometry_limit;
+        uint64_t limit=spec.constants?pool->constant_limit:pool->geometry_limit;bool waited=false;
         for(;;){
           bool room;{std::lock_guard lock(pool->mutex);auto used=spec.constants?pool->constants:pool->geometry;room=length<=limit&&used<=limit-length;}
           if(room)break;
@@ -462,7 +462,15 @@ struct MetalBackend::Impl {
             // still held by a GPU frame never enter this free list.
             if(!pool->free_constants.empty()){auto old=pool->free_constants.begin();pool->constants-=old->first;pool->free_constants.erase(old);continue;}
           }
-          if(!buffers.Pop())return Fail(error,"Immutable GPU storage is still owned by pending frames or exceeds its budget");
+          if(buffers.Pop())continue;
+          if(waited)return Fail(error,"Immutable GPU storage is still owned by pending frames or exceeds its budget");
+          // Older in-flight packets hold the remaining pages. Let them retire
+          // once (this packet already holds a slot), then retry.
+          std::unique_lock lock(state->mutex);
+          if(!state->changed.wait_for(lock,std::chrono::seconds(5),[&]{return state->pending<=1||state->lost;}))
+            return Fail(error,"Immutable GPU storage did not retire within five seconds");
+          if(state->lost){error=state->loss;return false;}
+          waited=true;
         }
         if(!buffer){
           buffer=[device newBufferWithLength:length options:MTLResourceStorageModeShared];if(!buffer)return Fail(error,"Immutable GPU buffer allocation failed");
@@ -761,8 +769,8 @@ struct MetalBackend::Impl {
     // drawing a full-area clear. Integer color formats keep the draw path.
     const RectClear* folded=nullptr;
     if(!pass.commands.empty())if(const auto* c=std::get_if<RectClear>(&pass.commands[0])) {
-      // Only whole-attachment passes fold, so no clear can reach outside the rectangle.
-      const auto& r=c->rectangle;bool covers=area.width==pass.width&&area.height==pass.height&&r.x==0&&r.y==0&&
+      // The load action is confined to the render area, which the clear covers.
+      const auto& r=c->rectangle;bool covers=r.x==0&&r.y==0&&
         r.x+r.width>=area.width&&r.y+r.height>=area.height&&(c->colors||c->depth||c->stencil);
       auto integer=[&](const native::Attachment& a){const auto f=a.view.format==Format::Invalid?surfaces.at(a.view.surface).source.format:a.view.format;
         return f==Format::RG16Uint||f==Format::RGBA16Uint||f==Format::R32Uint||f==Format::RG32Uint;};
