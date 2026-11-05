@@ -188,19 +188,19 @@ int main(){@autoreleasepool {
     Submit(backend,std::move(f));Pixel(backend,View(1),5,5,{255,0,0,255});Pixel(backend,View(1),1,1,{0,0,255,255});Done("partial stencil clear and stencil comparison");
   }
   {
-    // A leading clear covering the render area becomes a load action. With a
-    // tight render area inside one tile, pixels outside it must survive.
+    // A whole-attachment leading clear becomes a load action. A clear covering
+    // only a tight render area keeps the draw path, preserving other pixels.
     MetalBackend backend;Frame f;f.sequence=1;auto target=Target(1);f.surfaces={target};f.commands.emplace_back(ColorPass(1,{1,0,0,1}));Submit(backend,std::move(f));
     auto clearing=[&](uint64_t sequence,rex::native::Rect rect,std::array<double,4> color){
       Frame g;g.sequence=sequence;g.surfaces={target};Pass p;p.width=p.height=16;p.colors[0]=rex::native::Attachment{View(1)};
       RectClear c;c.rectangle=rect;c.colors=1;c.color[0]=color;p.commands.push_back(c);g.commands.emplace_back(std::move(p));return g;};
     Submit(backend,clearing(2,{0,0,16,16},{0,0,1,1}));Pixel(backend,View(1),8,8,{0,0,255,255});Check(backend.Stats().folded_clears==1);
-    Submit(backend,clearing(3,{0,0,8,5},{0,1,0,1}));Check(backend.Stats().folded_clears==2);
+    Submit(backend,clearing(3,{0,0,8,5},{0,1,0,1}));Check(backend.Stats().folded_clears==1);
     Pixel(backend,View(1),2,2,{0,255,0,255});Pixel(backend,View(1),7,4,{0,255,0,255});
     Pixel(backend,View(1),2,5,{0,0,255,255});Pixel(backend,View(1),8,2,{0,0,255,255});Pixel(backend,View(1),12,12,{0,0,255,255});
-    Submit(backend,clearing(4,{2,2,4,4},{1,1,1,1}));Check(backend.Stats().folded_clears==2);
+    Submit(backend,clearing(4,{2,2,4,4},{1,1,1,1}));Check(backend.Stats().folded_clears==1);
     Pixel(backend,View(1),3,3,{255,255,255,255});Pixel(backend,View(1),1,1,{0,255,0,255});
-    Done("render-area clears fold into load actions and preserve pixels outside the area");
+    Done("whole-attachment clears fold; render-area clears preserve pixels outside the area");
   }
   {
     MetalBackend backend;Surface image=Target(2);image.renderable=false;std::vector<std::byte> pixels(1024);
